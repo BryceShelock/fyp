@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>WeChat FYP Prototype - Discover Entrance</title>
+    <title>FYP WeChat-style Prototype</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
@@ -43,6 +43,11 @@
         }
         .status-input::placeholder { color: rgba(255, 255, 255, 0.7); }
         .status-detail-bg { background: linear-gradient(180deg, #a8edea 0%, #fed6e3 100%); }
+        .bilingual-cn-en hr {
+            border: 0;
+            border-top: 1px solid rgba(0,0,0,0.12);
+            margin: 0.35rem 0;
+        }
     </style>
 </head>
 <body class="wx-bg font-sans select-none">
@@ -53,8 +58,11 @@
             <div class="flex items-center space-x-2">
                 <!-- 朋友圈页面，点击返回箭头，直接回到发现页 -->
                 <i v-if="currentPage === 'moments'" @click="currentPage = 'main'; activeTab = 'discover'; isCommenting = false;" class="ri-arrow-left-s-line text-2xl cursor-pointer"></i>
-                <i v-else-if="currentPage !== 'main'" @click="goBack; isCommenting = false;" class="ri-arrow-left-s-line text-2xl cursor-pointer"></i>
-                <span class="font-bold text-[17px]">{{ headerTitle }}</span>
+                <i v-else-if="currentPage !== 'main'" @click="goBack(); isCommenting = false;" class="ri-arrow-left-s-line text-2xl cursor-pointer"></i>
+                <div class="flex flex-col leading-tight">
+                    <span class="font-bold text-[17px]">{{ headerTitle }}</span>
+                    <span v-if="headerTitleEn" class="text-[10px] text-gray-500 font-normal">{{ headerTitleEn }}</span>
+                </div>
             </div>
             <div v-if="currentPage === 'moments'">
                 <i @click="isPublishing = true" class="ri-camera-line text-2xl cursor-pointer"></i>
@@ -71,31 +79,33 @@
                             <div class="w-10 h-10 rounded bg-gray-200 flex-shrink-0 overflow-hidden">
                                 <img :src="msg.role === 'user' ? 'https://api.dicebear.com/7.x/avataaars/svg?seed=Felix' : 'https://api.dicebear.com/7.x/bottts/svg?seed=AI'" class="w-full">
                             </div>
-                            <div :class="[msg.role === 'user' ? 'bg-[#95EC69]' : 'bg-white border']" class="p-2 rounded-md max-w-[70%] text-[15px] shadow-sm">
-                                {{ msg.content }}
+                            <div :class="[msg.role === 'user' ? 'bg-[#95EC69]' : 'bg-white border']" class="p-2 rounded-md max-w-[70%] text-[15px] shadow-sm bilingual-cn-en">
+                                <div class="whitespace-pre-wrap">{{ msg.content }}</div>
+                                <hr>
+                                <div class="text-[11px] text-gray-600 leading-snug whitespace-pre-wrap">{{ chatMessageEn(msg) }}</div>
                             </div>
                         </div>
                     </div>
                     <div class="p-3 border-t flex items-center space-x-2 bg-[#F7F7F7] flex-shrink-0">
-                        <input v-model="chatInput" @keyup.enter="sendChatMsg" class="flex-1 h-10 rounded border-none px-3 outline-none" placeholder="输入消息...">
-                        <button @click="sendChatMsg" class="wx-btn-green px-4 py-1.5 rounded">发送</button>
+                        <input v-model="chatInput" @keyup.enter="sendChatMsg" class="flex-1 h-10 rounded border-none px-3 outline-none" placeholder="Type in Chinese… (connected to backend)">
+                        <button @click="sendChatMsg" class="wx-btn-green px-4 py-1.5 rounded">Send</button>
                     </div>
                 </section>
 
                 <section v-if="activeTab === 'admin'" class="bg-white h-full flex">
                     <div class="w-[42%] border-r overflow-y-auto">
                         <div class="p-3 border-b flex justify-between items-center">
-                            <span class="font-bold">待接管会话</span>
-                            <button @click="refreshAdminQueue" class="text-xs px-2 py-1 border rounded">刷新</button>
+                            <span class="font-bold">Queue</span>
+                            <button @click="refreshAdminQueue" class="text-xs px-2 py-1 border rounded">Refresh</button>
                         </div>
                         <div v-for="item in adminQueue" :key="item.conversation_id" class="p-3 border-b cursor-pointer active:bg-gray-100" @click="selectAdminConversation(item.conversation_id)">
                             <div class="text-xs text-gray-500">{{ item.user_id }}</div>
-                            <div class="text-sm truncate">{{ item.last_user_message || '无内容' }}</div>
+                            <div class="text-sm truncate">{{ item.last_user_message || '(empty)' }}</div>
                         </div>
                     </div>
                     <div class="flex-1 flex flex-col">
                         <div class="p-3 border-b text-sm">
-                            会话：{{ adminConversationId || '未选择' }}
+                            Conversation: {{ adminConversationId || 'none selected' }}
                         </div>
                         <div class="flex-1 p-3 overflow-y-auto space-y-2">
                             <div v-for="m in adminMessages" :key="m.ts + m.role + m.content" class="text-sm">
@@ -103,9 +113,9 @@
                             </div>
                         </div>
                         <div class="p-3 border-t flex space-x-2">
-                            <button @click="takeoverSelected" class="px-3 py-1 border rounded text-sm">接管</button>
-                            <input v-model="adminReplyInput" @keyup.enter="sendAdminReply" class="flex-1 h-9 rounded border px-2 outline-none" placeholder="管理员回复">
-                            <button @click="sendAdminReply" class="wx-btn-green px-3 rounded">发送</button>
+                            <button @click="takeoverSelected" class="px-3 py-1 border rounded text-sm">Take over</button>
+                            <input v-model="adminReplyInput" @keyup.enter="sendAdminReply" class="flex-1 h-9 rounded border px-2 outline-none" placeholder="Admin reply">
+                            <button @click="sendAdminReply" class="wx-btn-green px-3 rounded">Send</button>
                         </div>
                     </div>
                 </section>
@@ -118,7 +128,10 @@
                                 <div class="bg-blue-500 w-6 h-6 rounded flex items-center justify-center">
                                     <i class="ri-chrome-fill text-white text-sm"></i>
                                 </div>
-                                <span class="text-[16px]">朋友圈</span>
+                                <div class="text-[16px] leading-tight">
+                                    <span>朋友圈</span>
+                                    <div class="text-[10px] text-gray-500 font-normal">Moments</div>
+                                </div>
                             </div>
                             <div class="flex items-center space-x-2">
                                 <div class="w-8 h-8 rounded overflow-hidden">
@@ -134,17 +147,17 @@
                     <div class="bg-white p-6 flex items-center space-x-4 mb-3">
                         <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Felix" class="w-16 h-16 rounded-xl bg-gray-100">
                         <div>
-                            <h2 class="text-xl font-bold">蔡同学</h2>
-                            <p class="text-gray-400 text-sm">微信号: fyp_2026</p>
+                            <h2 class="text-xl font-bold">Cai (demo)</h2>
+                            <p class="text-gray-400 text-sm">WeChat ID: fyp_2026</p>
                         </div>
                     </div>
                     <div @click="currentPage = 'statusSelect'" class="bg-white p-4 flex justify-between items-center cursor-pointer border-b">
                         <div class="flex items-center space-x-3">
                             <i class="ri-emotion-happy-line text-blue-500 text-xl"></i>
-                            <span>状态</span>
+                            <span>Status</span>
                         </div>
                         <span class="text-gray-400 text-sm" v-if="currentStatus">{{ currentStatus.label }} ></span>
-                        <span class="text-gray-400 text-sm" v-else>未设置 ></span>
+                        <span class="text-gray-400 text-sm" v-else>Not set ></span>
                     </div>
                 </section>
             </div>
@@ -154,7 +167,7 @@
                 <div class="h-72 bg-gray-400 relative mb-12">
                     <img src="https://picsum.photos/800/600?random=20" class="w-full h-full object-cover">
                     <div class="absolute -bottom-6 right-4 flex items-center space-x-4">
-                        <span class="text-white font-bold text-lg drop-shadow-md mb-6">蔡同学</span>
+                        <span class="text-white font-bold text-lg drop-shadow-md mb-6">蔡同学<span class="block text-xs font-normal opacity-90">Cai (demo)</span></span>
                         <div class="w-16 h-16 rounded-lg bg-gray-100 border-2 border-white shadow-sm overflow-hidden">
                             <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Felix" class="w-full h-full">
                         </div>
@@ -165,29 +178,35 @@
                     <img :src="post.avatar" class="w-10 h-10 rounded flex-shrink-0">
                     <div class="flex-1">
                         <div class="wx-text-blue font-bold text-[15px]">{{ post.username }}</div>
-                        <div class="text-[15px] my-1 leading-relaxed whitespace-pre-wrap">{{ post.content }}</div>
+                        <div class="text-[15px] my-1 leading-relaxed bilingual-cn-en">
+                            <div class="whitespace-pre-wrap">{{ post.content }}</div>
+                            <hr>
+                            <div class="text-[11px] text-gray-600 whitespace-pre-wrap">{{ post.contentEn || momentContentEn(post.content) }}</div>
+                        </div>
                         
                         <div v-if="post.images.length > 0" :class="['grid gap-1 my-2', post.images.length === 4 ? 'grid-4' : (post.images.length === 1 ? 'grid-1' : 'grid-3')]">
                             <img v-for="img in post.images" :src="img" class="img-square">
                         </div>
 
                         <div class="flex justify-between items-center mt-3 relative">
-                            <span class="text-gray-400 text-xs">{{ post.time }}</span>
+                            <span class="text-gray-400 text-xs">{{ post.time }}<span class="block text-[10px] opacity-80">{{ post.timeEn || momentTimeEn(post.time) }}</span></span>
                             <div class="bg-[#F7F7F7] px-2 py-0.5 rounded cursor-pointer" @click.stop="toggleCommentMenu(index)">
                                 <i class="ri-more-fill wx-text-blue text-xl"></i>
                             </div>
                             
                             <transition name="menu-pop">
                                 <div v-if="commentMenuIndex === index" class="absolute right-10 bg-[#4C4C4C] text-white rounded-md flex h-9 items-center z-20 overflow-hidden">
-                                    <div class="flex-1 px-4 flex items-center border-r border-gray-600 text-sm whitespace-nowrap"><i class="ri-heart-line mr-1"></i>赞</div>
-                                    <div @click.stop="startComment(index)" class="flex-1 px-4 flex items-center text-sm whitespace-nowrap"><i class="ri-chat-3-line mr-1"></i>评论</div>
+                                    <div class="flex-1 px-4 flex items-center border-r border-gray-600 text-sm whitespace-nowrap"><i class="ri-heart-line mr-1"></i>赞<span class="text-[10px] opacity-80 block leading-none">Like</span></div>
+                                    <div @click.stop="startComment(index)" class="flex-1 px-4 flex items-center text-sm whitespace-nowrap"><i class="ri-chat-3-line mr-1"></i>评论<span class="text-[10px] opacity-80 block leading-none">Comment</span></div>
                                 </div>
                             </transition>
                         </div>
 
                         <div v-if="post.comments.length > 0" class="bg-[#F7F7F7] rounded-sm mt-2 p-2 text-[14px]">
-                            <div v-for="c in post.comments" class="mb-1">
-                                <span class="wx-text-blue font-medium">{{ c.user }}:</span> {{ c.text }}
+                            <div v-for="(c, ci) in post.comments" :key="ci + '-' + c.text" class="mb-1 bilingual-cn-en">
+                                <div><span class="wx-text-blue font-medium">{{ c.user }}:</span> {{ c.text }}</div>
+                                <hr>
+                                <div class="text-[11px] text-gray-600">{{ momentCommentEn(c.text) }}</div>
                             </div>
                         </div>
                     </div>
@@ -198,11 +217,12 @@
             <div v-if="isPublishing" class="fixed inset-0 z-[100] flex justify-center items-start">
                 <div class="w-full max-w-md h-screen bg-white flex flex-col">
                     <header class="h-12 flex items-center justify-between px-4 bg-[#EDEDED]">
-                        <span @click="isPublishing = false" class="text-[16px]">取消</span>
-                        <button @click="handlePublish" :disabled="!momentText && images.length === 0" class="wx-btn-green px-4 py-1.5 rounded-md font-medium text-sm">发表</button>
+                        <span @click="isPublishing = false" class="text-[16px]">Cancel</span>
+                        <button @click="handlePublish" :disabled="!momentText && images.length === 0" class="wx-btn-green px-4 py-1.5 rounded-md font-medium text-sm">Post</button>
                     </header>
                     <div class="p-4 flex-1">
-                        <textarea v-model="momentText" class="w-full h-32 outline-none text-[17px] resize-none border-none" placeholder="这一刻的想法..."></textarea>
+                        <textarea v-model="momentText" class="w-full h-32 outline-none text-[17px] resize-none border-none" placeholder="这一刻的想法…（中文）"></textarea>
+                        <p class="text-[11px] text-gray-500 mt-1">EN: Share this moment in Chinese above. English appears below your post after publishing.</p>
                         
                         <div class="grid grid-cols-3 gap-2 mt-4">
                             <div v-for="(img, idx) in images" :key="idx" class="aspect-square relative">
@@ -308,7 +328,7 @@
                 </div>
 
                 <div class="p-6">
-                    <button @click="commitStatus" class="wx-btn-green w-full py-3 rounded-lg text-center font-bold text-lg">发布状态</button>
+                    <button @click="commitStatus" class="wx-btn-green w-full py-3 rounded-lg text-center font-bold text-lg">Post status</button>
                 </div>
             </section>
         </main>
@@ -323,8 +343,8 @@
 
         <!-- 评论框 -->
         <div v-if="isCommenting" class="fixed bottom-0 left-1/2 -translate-x-1/2 p-3 bg-[#F7F7F7] border-t flex items-center space-x-2 z-[110] w-full max-w-md">
-            <input v-model="commentInput" autofocus class="flex-1 h-10 rounded border-none px-3 outline-none" placeholder="评论">
-            <button @click="submitComment" class="wx-btn-green px-4 py-1.5 rounded">发送</button>
+            <input v-model="commentInput" autofocus class="flex-1 h-10 rounded border-none px-3 outline-none" placeholder="Comment (Chinese)">
+            <button @click="submitComment" class="wx-btn-green px-4 py-1.5 rounded">Send</button>
         </div>
     </div>
 
@@ -339,26 +359,72 @@
                     if (currentPage.value === 'moments') return '朋友圈';
                     if (currentPage.value === 'statusSelect') return 'Set Status';
                     if (currentPage.value === 'statusDetail') return 'Status';
-                    if (activeTab.value === 'chat') return '微信';
-                    if (activeTab.value === 'discover') return '发现';
-                    if (activeTab.value === 'admin') return '管理员';
-                    return '我';
+                    if (activeTab.value === 'chat') return 'Chats';
+                    if (activeTab.value === 'discover') return 'Discover';
+                    if (activeTab.value === 'admin') return 'Admin';
+                    return 'Me';
+                });
+
+                const headerTitleEn = computed(() => {
+                    if (currentPage.value === 'moments') return 'Moments';
+                    if (currentPage.value === 'statusSelect') return 'Choose a status';
+                    if (currentPage.value === 'statusDetail') return 'Preview';
+                    if (activeTab.value === 'chat') return 'Thread shows Chinese with English under each bubble';
+                    if (activeTab.value === 'discover') return 'Open Moments';
+                    if (activeTab.value === 'admin') return 'Moderator console';
+                    return 'Profile';
                 });
 
                 const tabs = [
-                    { id: 'chat', name: '微信', icon: 'ri-chat-3-line', iconActive: 'ri-chat-3-fill' },
-                    { id: 'discover', name: '发现', icon: 'ri-compass-3-line', iconActive: 'ri-compass-3-fill' },
-                    { id: 'admin', name: '管理', icon: 'ri-shield-user-line', iconActive: 'ri-shield-user-fill' },
-                    { id: 'me', name: '我', icon: 'ri-user-3-line', iconActive: 'ri-user-3-fill' }
+                    { id: 'chat', name: 'Chats', icon: 'ri-chat-3-line', iconActive: 'ri-chat-3-fill' },
+                    { id: 'discover', name: 'Discover', icon: 'ri-compass-3-line', iconActive: 'ri-compass-3-fill' },
+                    { id: 'admin', name: 'Admin', icon: 'ri-shield-user-line', iconActive: 'ri-shield-user-fill' },
+                    { id: 'me', name: 'Me', icon: 'ri-user-3-line', iconActive: 'ri-user-3-fill' }
                 ];
+
+                const CHAT_LINE_EN = {
+                    '你好，我是心理辅助AI。': 'Hello, I am a mental-health support AI.',
+                    '已收到': 'Received.',
+                };
+
+                const momentContentEn = (zh) => {
+                    const map = {
+                        '毕业设计进度如何了？': 'How is your graduation project going?',
+                        '终于跑通模型了，不容易！': 'Finally got the model running — not easy!',
+                    };
+                    if (map[zh]) return map[zh];
+                    if (!zh || !zh.trim()) return '—';
+                    return 'Your moment in Chinese above; add machine translation for a fuller English line in production.';
+                };
+
+                const momentTimeEn = (zh) => {
+                    const t = { '1小时前': '1 hour ago', '3小时前': '3 hours ago', '刚刚': 'Just now' };
+                    return t[zh] || '';
+                };
+
+                const momentCommentEn = (zh) => {
+                    const map = { '大佬带带我': 'Please teach me — I want to learn from you!' };
+                    return map[zh] || 'Comment in Chinese above.';
+                };
+
+                const chatMessageEn = (msg) => {
+                    if (msg.en) return msg.en;
+                    const t = msg.content || '';
+                    if (CHAT_LINE_EN[t]) return CHAT_LINE_EN[t];
+                    if (t.startsWith('后端连接失败')) return t.replace('后端连接失败', 'Backend connection failed').replace('Error', 'error');
+                    if (t.includes('检测到高风险内容')) return 'High-risk content detected. You have been transferred to a human moderator. Please wait.';
+                    if (t.includes('我在这里陪你')) return 'I am here with you. (Supportive reply; risk level and mental-state hints are in the Chinese line above.)';
+                    if (msg.role === 'user') return 'Your message in Chinese above.';
+                    return 'See the Chinese line above; demo UI — plug-in translation optional.';
+                };
 
                 // 朋友圈
                 const isPublishing = ref(false);
                 const momentText = ref('');
                 const images = ref([]);
                 const posts = ref([
-                    { avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Alice', username: '导师', content: '毕业设计进度如何了？', images: [], time: '1小时前', comments: [] },
-                    { avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Bob', username: '张同学', content: '终于跑通模型了，不容易！', images: ['https://picsum.photos/400/400?random=1'], time: '3小时前', comments: [{user: '我', text: '大佬带带我'}] }
+                    { avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Alice', username: '导师', content: '毕业设计进度如何了？', contentEn: 'How is your graduation project going?', images: [], time: '1小时前', timeEn: '1 hour ago', comments: [] },
+                    { avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Bob', username: '张同学', content: '终于跑通模型了，不容易！', contentEn: 'Finally got the model running — not easy!', images: ['https://picsum.photos/400/400?random=1'], time: '3小时前', timeEn: '3 hours ago', comments: [{user: '我', text: '大佬带带我'}] }
                 ]);
 
                 const triggerUpload = () => document.getElementById('fileInput').click();
@@ -375,8 +441,10 @@
                         avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Felix',
                         username: '蔡同学',
                         content: momentText.value,
+                        contentEn: momentContentEn(momentText.value),
                         images: [...images.value],
                         time: '刚刚',
+                        timeEn: momentTimeEn('刚刚'),
                         comments: []
                     });
                     isPublishing.value = false;
@@ -590,8 +658,9 @@
                 };
 
                 return {
-                    activeTab, currentPage, headerTitle, tabs,
-                    chatHistory, chatInput, sendChatMsg,
+                    activeTab, currentPage, headerTitle, headerTitleEn, tabs,
+                    chatHistory, chatInput, sendChatMsg, chatMessageEn,
+                    momentContentEn, momentTimeEn, momentCommentEn,
                     adminQueue, adminConversationId, adminMessages, adminReplyInput,
                     refreshAdminQueue, selectAdminConversation, takeoverSelected, sendAdminReply,
                     posts, isPublishing, momentText, images, triggerUpload, onFilesSelected, handlePublish,

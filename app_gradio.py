@@ -40,7 +40,7 @@ def predict(text: str, model_dir: str, device: str):
         if isinstance(result, (list, tuple)):
             return {
                 "raw_output": list(result),
-                "_warning": "模型返回了非 dict 结构，已按兼容模式展示。",
+                "_warning": "Model returned a non-dict structure; shown in compatibility mode.",
             }
         return {"raw_output": str(result)}
     except Exception as e:
@@ -50,30 +50,33 @@ def predict(text: str, model_dir: str, device: str):
 def show_device(model_dir: str, device: str):
     # 触发一次加载并返回实际设备
     _, _, d = load_model(model_dir, device=device)
-    return f"当前推理设备：{d}（cuda可用={torch.cuda.is_available()}）"
+    return f"Device: {d} (torch.cuda.is_available()={torch.cuda.is_available()})"
 
 
 def fetch_backend_logs(api_base: str, limit: int = 20):
     try:
         base = (api_base or "").strip().rstrip("/")
         if not base:
-            return {"error": "请填写后端地址，例如 http://127.0.0.1:8010"}
+            return {"error": "Enter backend base URL, e.g. http://127.0.0.1:8010"}
         query = urllib.parse.urlencode({"limit": int(limit)})
         url = f"{base}/monitor/latest?{query}"
         with urllib.request.urlopen(url, timeout=4) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             return data
     except urllib.error.URLError as e:
-        return {"error": f"连接后端失败: {e}"}
+        return {"error": f"Failed to reach backend: {e}"}
     except Exception as e:
         return {"error": str(e)}
 
 
 def main():
     with gr.Blocks() as demo:
-        gr.Markdown("## 三任务心理建模（S1多标签 / S2单标签 / S3风险检测）")
+        gr.Markdown(
+            "## Multi-task psychology model (S1 multi-label / S2 single-label / S3 risk)\n\n"
+            "Sample input may remain **Chinese**; JSON keys from the model may stay **Chinese** as returned by `predict_text`."
+        )
         with gr.Tabs():
-            with gr.TabItem("本地模型调试"):
+            with gr.TabItem("Local model"):
                 model_dir_in = gr.Textbox(
                     value="multitask_output/best_model",
                     label="model_dir",
@@ -84,24 +87,27 @@ def main():
                     value="auto",
                     label="device",
                 )
-                device_info = gr.Textbox(label="设备状态", interactive=False)
+                device_info = gr.Textbox(label="Device status", interactive=False)
                 text_in = gr.Textbox(
-                    label="输入文本",
+                    label="Input text (Chinese OK)",
                     value="我压力好大，作业又好多，朋友也不想理我，也有点不想活了",
                     lines=3,
                 )
-                out = gr.JSON(label="预测结果")
+                out = gr.JSON(label="Prediction (raw JSON)")
 
-                gr.Button("检查设备").click(fn=show_device, inputs=[model_dir_in, device_in], outputs=[device_info])
-                btn = gr.Button("预测")
+                gr.Button("Check device").click(fn=show_device, inputs=[model_dir_in, device_in], outputs=[device_info])
+                btn = gr.Button("Predict")
                 btn.click(fn=predict, inputs=[text_in, model_dir_in, device_in], outputs=[out])
 
-            with gr.TabItem("后端链路监控"):
-                gr.Markdown("显示 `wechat_mock.html -> backend_api.py -> 模型输出/action` 的最新记录。")
-                api_base = gr.Textbox(value="http://127.0.0.1:8010", label="backend_api 地址")
-                log_limit = gr.Slider(minimum=1, maximum=100, value=20, step=1, label="拉取条数")
-                logs_out = gr.JSON(label="最新后端推理日志")
-                gr.Button("刷新日志").click(fetch_backend_logs, inputs=[api_base, log_limit], outputs=[logs_out])
+            with gr.TabItem("Backend monitor"):
+                gr.Markdown(
+                    "Latest records from `wechat_mock.html → backend_api.py → model output / action` "
+                    "(same pipeline as the demo)."
+                )
+                api_base = gr.Textbox(value="http://127.0.0.1:8010", label="Backend API base URL")
+                log_limit = gr.Slider(minimum=1, maximum=100, value=20, step=1, label="Number of rows")
+                logs_out = gr.JSON(label="Latest inference logs")
+                gr.Button("Refresh logs").click(fetch_backend_logs, inputs=[api_base, log_limit], outputs=[logs_out])
 
     # 仅本地启动：不使用 share（避免 frpc 下载/代理/杀软问题）
     # 某些环境下 Gradio 会误判 localhost 不可访问，这里关闭该自检。
