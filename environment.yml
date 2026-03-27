@@ -1,0 +1,19 @@
+name: fyp
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.10.12
+  - pip
+
+  # Use conda to install PyTorch + CUDA (much smaller download!)
+  - pytorch=2.4.0
+  - pytorch-cuda=12.1
+
+  # 说明：
+  # - 本环境文件只负责用 conda 装好 GPU 版 PyTorch（pytorch + pytorch-cuda）。
+  # - 其余 Python 依赖（transformers / datasets / peft / gradio 等）请用 pip 按 `requirements-pip.txt` 安装，
+  #   并显式指定可用的 pip 源（避免系统默认 pip 源不可用导致失败）。

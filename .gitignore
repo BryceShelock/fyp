@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite
+
+# Local environments
+.venv/
+venv/
+.env
+
+# Large/generated artifacts
+multitask_output*/
+dataset_multitask.csv
+dataset_multitask.jsonl
+
+# OS/editor
+.DS_Store
+Thumbs.db
