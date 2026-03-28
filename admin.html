@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FYP Admin — Queue &amp; LLM</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
+    <style>
+        .wx-btn-green { background-color: #07C160; color: white; }
+        .wx-btn-green:disabled { background-color: #e1e1e1; color: #b2b2b2; }
+    </style>
+</head>
+<body class="bg-[#EDEDED] font-sans min-h-screen">
+    <div id="app" class="max-w-3xl mx-auto min-h-screen flex flex-col bg-white shadow-lg">
+        <header class="h-12 border-b flex items-center justify-between px-4 bg-[#EDEDED] flex-shrink-0">
+            <div class="flex items-center gap-2">
+                <a :href="'wechat_mock.html' + pageQuery" class="text-gray-700 hover:text-black" aria-label="Back to chat demo">
+                    <i class="ri-arrow-left-s-line text-2xl"></i>
+                </a>
+                <div>
+                    <span class="font-bold text-[17px]">Admin</span>
+                    <span class="block text-[10px] text-gray-500">Moderator console &amp; reply LLM</span>
+                </div>
+            </div>
+        </header>
+
+        <div class="p-4 border-b bg-amber-50/80 space-y-4">
+            <h2 class="text-sm font-bold text-gray-800 flex items-center gap-2">
+                <i class="ri-settings-3-line"></i> AI reply API (backend)
+            </h2>
+            <p class="text-xs text-gray-600">配置写入服务器 SQLite。API Key 保存后不再回显；留空表示沿用已保存的 Key。</p>
+
+            <div class="rounded-lg border border-gray-300 bg-white/80 p-3">
+                <label class="flex items-center justify-between text-sm font-medium text-gray-800">
+                    <span>启用外部 LLM（关闭则对话走英文 fallback，不调接口）</span>
+                    <input v-model="llm.llm_enabled" type="checkbox" class="scale-110">
+                </label>
+                <label class="flex items-start gap-2 cursor-pointer text-xs text-gray-800 max-w-3xl mt-2">
+                    <input v-model="llm.chat_llm_http_stream" type="checkbox" class="mt-0.5 scale-110 shrink-0">
+                    <span><strong>对话走 HTTP 流式</strong>（对上游发 <code class="text-[10px]">stream:true</code>，前端仍用 SSE 收事件）。<strong>取消勾选</strong>即<strong>关闭上游流式</strong>，改为一次整包 <code class="text-[10px]">stream:false</code>，通常能避免流式解析导致的半截回复；咨询师人设仍在系统提示词里，与是否流式无关。</span>
+                </label>
+            </div>
+
+            <div class="rounded-lg border-2 border-emerald-200 bg-emerald-50/40 p-3 space-y-2">
+                <h3 class="text-sm font-bold text-emerald-900">① 本地 Ollama</h3>
+                <p class="text-[11px] text-gray-600">仅本机 <code class="bg-white px-1 rounded">127.0.0.1:11434</code>，一般不需要 API Key。与下方第三方 API 共用同一份「当前配置」，一次只选一种连法。</p>
+                <label class="flex items-center justify-between text-xs font-medium text-gray-800 max-w-md border rounded px-2 py-2 bg-white">
+                    <span>{{ ollamaLocalMode ? '已选：Ollama 本地' : '未使用 Ollama' }}</span>
+                    <input v-model="ollamaLocalMode" @change="onOllamaToggle" type="checkbox">
+                </label>
+            </div>
+
+            <div class="rounded-lg border-2 border-sky-200 bg-sky-50/40 p-3 space-y-3">
+                <h3 class="text-sm font-bold text-sky-900">② 第三方 API（DeepSeek / OpenAI 兼容代理等）</h3>
+                <p class="text-[11px] text-gray-700 leading-relaxed">
+                    按顺序：<strong>Base URL</strong> → <strong>Path</strong> → <strong>模型名（必须是接口注册的 id）</strong> → <strong>API Key</strong> → 点 <strong>Save</strong>。
+                    然后再用下方「保存为命名预设」存成方案，之后用下拉 <strong>应用到当前</strong> 切换（Key 仍留在服务器，不写入预设）。
+                </p>
+                <div class="p-2 rounded bg-amber-100/80 border border-amber-200 text-[11px] text-gray-800 space-y-1">
+                    <p><strong>DeepSeek 报错「Model Not Exist」？</strong> 网页上的「DeepSeek-V3.2」是展示名；API 里要用官方 id：
+                        <code class="bg-white px-1 rounded">deepseek-chat</code>（对话）或
+                        <code class="bg-white px-1 rounded">deepseek-reasoner</code>（思考模式）。</p>
+                    <p>官方 Base：<code class="bg-white px-1 rounded">https://api.deepseek.com</code>，Path：<code class="bg-white px-1 rounded">/chat/completions</code>（不是 <code class="bg-white px-1">/v1/chat/completions</code>）。<strong>Group 请留空</strong>。</p>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    <button type="button" @click="fillDeepSeekChat" class="text-xs px-2 py-1.5 rounded border bg-white">填入 DeepSeek：deepseek-chat</button>
+                    <button type="button" @click="fillDeepSeekReasoner" class="text-xs px-2 py-1.5 rounded border bg-white">填入 DeepSeek：deepseek-reasoner</button>
+                </div>
+                <div class="grid gap-2 sm:grid-cols-2">
+                    <label class="block text-xs font-medium text-gray-700">API base URL
+                        <input v-model="llm.api_base" type="text" class="mt-0.5 w-full border rounded px-2 py-1.5 text-sm" placeholder="https://api.deepseek.com">
+                    </label>
+                    <label class="block text-xs font-medium text-gray-700">Endpoint path
+                        <input v-model="llm.endpoint_path" type="text" class="mt-0.5 w-full border rounded px-2 py-1.5 text-sm" placeholder="/chat/completions">
+                    </label>
+                    <label class="block text-xs font-medium text-gray-700">Model（接口 id，勿填展示名）
+                        <input v-model="llm.model" type="text" class="mt-0.5 w-full border rounded px-2 py-1.5 text-sm" placeholder="deepseek-chat">
+                    </label>
+                    <label class="block text-xs font-medium text-gray-700">Group（DeepSeek 留空；仅部分代理需要）
+                        <input v-model="llm.api_group" type="text" class="mt-0.5 w-full border rounded px-2 py-1.5 text-sm" placeholder="留空">
+                    </label>
+                    <label class="block text-xs font-medium text-gray-700 sm:col-span-2">API key（Bearer）
+                        <input v-model="llm.api_key_input" @input="llmKeyDirty = true" type="password" autocomplete="off" class="mt-0.5 w-full border rounded px-2 py-1.5 text-sm" :placeholder="llm.has_api_key ? '•••••••• (留空则不改)' : '粘贴 Key 后保存'">
+                    </label>
+                </div>
+                <details class="text-xs border rounded bg-white/90 px-2 py-2">
+                    <summary class="cursor-pointer font-medium text-gray-800">高级采样参数（会发给兼容接口；max_tokens=0 表示不传该字段）</summary>
+                    <div class="grid sm:grid-cols-2 gap-2 mt-2">
+                        <label>Temperature <input v-model.number="llm.temperature" type="number" step="0.1" min="0" max="2" class="mt-0.5 w-full border rounded px-2 py-1"></label>
+                        <label>Top P <input v-model.number="llm.top_p" type="number" step="0.05" min="0" max="1" class="mt-0.5 w-full border rounded px-2 py-1"></label>
+                        <label>Frequency penalty <input v-model.number="llm.frequency_penalty" type="number" step="0.1" min="-2" max="2" class="mt-0.5 w-full border rounded px-2 py-1"></label>
+                        <label>Presence penalty <input v-model.number="llm.presence_penalty" type="number" step="0.1" min="-2" max="2" class="mt-0.5 w-full border rounded px-2 py-1"></label>
+                        <label class="sm:col-span-2">Max tokens（0=省略，由上游默认上下文决定）
+                            <input v-model.number="llm.max_tokens" type="number" step="64" min="0" max="128000" class="mt-0.5 w-full border rounded px-2 py-1"></label>
+                        <label class="sm:col-span-2 flex items-start gap-2 cursor-pointer">
+                            <input v-model="llm.nonstream_http_fallback" type="checkbox" class="mt-0.5 scale-110 shrink-0">
+                            <span>仅在<strong>已勾选「对话走 HTTP 流式」</strong>时生效：流式无内容或失败时，允许再发一次非流式请求补全。取消勾选则只做 <code class="text-[10px]">stream:true</code>（便于排查）。若已关闭上游流式，本项无影响。</span>
+                        </label>
+                    </div>
+                </details>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-2">
+                <button @click="saveLlmConfig" :disabled="llmSaving" class="wx-btn-green px-4 py-1.5 rounded text-sm font-medium">{{ llmSaving ? 'Saving…' : 'Save LLM settings' }}</button>
+                <button @click="testLlmConfig" :disabled="llmTesting || llmSaving" class="px-4 py-1.5 rounded text-sm font-medium border">{{ llmTesting ? 'Testing…' : 'Test LLM connection' }}</button>
+                <span v-if="llmMessage" class="text-xs" :class="llmError ? 'text-red-600' : 'text-green-700'">{{ llmMessage }}</span>
+            </div>
+
+            <div class="rounded-lg border border-amber-300/80 bg-white/90 p-3">
+                <h3 class="text-xs font-bold text-gray-800 mb-1">③ 命名预设（不含 API Key）</h3>
+                <p class="text-[11px] text-gray-600 mb-2">先完成上方填写并 <strong>Save</strong>（含 Key），再「保存为命名预设」存 URL/模型/采样等；以后用下拉加载并「应用到当前」。</p>
+                <div class="flex flex-wrap items-end gap-2">
+                    <label class="block text-xs font-medium text-gray-700 min-w-[10rem] flex-1">
+                        选择预设
+                        <select v-model="selectedPresetId" class="mt-0.5 w-full border rounded px-2 py-1.5 text-sm">
+                            <option value="">— Select —</option>
+                            <option v-for="p in llmPresets" :key="p.id" :value="String(p.id)">{{ p.name }}</option>
+                        </select>
+                    </label>
+                    <button type="button" @click="applySavedPreset" :disabled="!selectedPresetId" class="px-3 py-1.5 rounded text-sm border disabled:opacity-40">应用到当前</button>
+                    <button type="button" @click="saveNamedPreset" class="px-3 py-1.5 rounded text-sm border">保存为命名预设…</button>
+                    <button type="button" @click="deleteSavedPreset" :disabled="!selectedPresetId" class="px-3 py-1.5 rounded text-sm border border-red-200 text-red-700 disabled:opacity-40">删除预设</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex-1 flex min-h-0 overflow-hidden">
+            <div class="w-[38%] border-r overflow-y-auto max-h-[calc(100vh-14rem)]">
+                <div class="p-3 border-b flex justify-between items-center sticky top-0 bg-white z-10">
+                    <div class="flex items-center gap-2">
+                        <span class="font-bold text-sm">Queue</span>
+                        <button @click="activeLeftTab='queue'" class="text-[11px] px-2 py-1 border rounded" :class="activeLeftTab==='queue' ? 'bg-gray-100' : ''">Queue</button>
+                        <button @click="activeLeftTab='db'" class="text-[11px] px-2 py-1 border rounded" :class="activeLeftTab==='db' ? 'bg-gray-100' : ''">DB</button>
+                    </div>
+                    <button @click="refreshAdminQueue" class="text-xs px-2 py-1 border rounded">Refresh</button>
+                </div>
+                <div v-if="activeLeftTab==='queue'">
+                    <div v-for="item in adminQueue" :key="item.conversation_id" class="p-3 border-b cursor-pointer active:bg-gray-100" @click="selectAdminConversation(item.conversation_id)">
+                        <div class="text-xs text-gray-500">{{ item.user_id }}</div>
+                        <div class="text-sm truncate">{{ item.last_user_message || '(empty)' }}</div>
+                    </div>
+                </div>
+                <div v-else class="p-3 space-y-2">
+                    <div class="text-xs text-gray-600">Database viewer (read-only)</div>
+                    <button @click="loadDbConversations" class="text-xs px-2 py-1 border rounded">Load conversations</button>
+                    <div class="space-y-1">
+                        <div v-for="c in dbConversations" :key="c.conversation_id" class="p-2 border rounded cursor-pointer hover:bg-gray-50" @click="selectAdminConversation(c.conversation_id)">
+                            <div class="text-[11px] text-gray-500">{{ c.user_id }} · {{ c.status }} · lock={{ c.admin_lock }}</div>
+                            <div class="text-xs truncate">{{ c.conversation_id }}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="flex-1 flex flex-col min-w-0 max-h-[calc(100vh-14rem)]">
+                <div class="p-3 border-b text-sm shrink-0 space-y-1">
+                    <div>Conversation: {{ adminConversationId || 'none selected' }}</div>
+                    <div v-if="adminConversationId" class="text-[11px] text-gray-500">Select messages to delete from DB, or clear the whole thread.</div>
+                </div>
+                <div class="flex-1 p-3 overflow-y-auto space-y-2 text-sm">
+                    <div v-for="m in adminMessages" :key="m.id != null ? m.id : (m.ts + '-' + m.role + '-' + m.content)" class="flex gap-2 items-start border-b border-gray-100 pb-2">
+                        <input v-if="m.id != null" type="checkbox" class="mt-1 shrink-0" :value="m.id" v-model="selectedMessageIds">
+                        <div class="flex-1 min-w-0">
+                            <span class="font-bold">{{ m.role }}:</span> {{ m.content }}
+                        </div>
+                    </div>
+                </div>
+                <div class="p-3 border-t flex flex-wrap gap-2 shrink-0 items-center">
+                    <button @click="takeoverSelected" class="px-3 py-1 border rounded text-sm whitespace-nowrap">Take over</button>
+                    <button @click="releaseSelected" class="px-3 py-1 border rounded text-sm whitespace-nowrap">Release to AI (low risk)</button>
+                    <button @click="deleteSelectedMessages" :disabled="!selectedMessageIds.length" class="px-3 py-1 border rounded text-sm whitespace-nowrap disabled:opacity-40">Delete selected</button>
+                    <button @click="clearAllAdminMessages" class="px-3 py-1 border border-red-200 text-red-700 rounded text-sm whitespace-nowrap">Clear all messages</button>
+                    <input v-model="adminReplyInput" @keyup.enter="sendAdminReply" class="flex-1 min-w-0 h-9 rounded border px-2 outline-none text-sm basis-[200px]" placeholder="Admin reply">
+                    <button @click="sendAdminReply" class="wx-btn-green px-3 rounded text-sm whitespace-nowrap">Send</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, onMounted } = Vue;
+
+        createApp({
+            setup() {
+                const apiFromQuery = new URLSearchParams(window.location.search).get('api');
+                const API_BASE = apiFromQuery || localStorage.getItem('fyp_api_base') || 'http://127.0.0.1:8010';
+                localStorage.setItem('fyp_api_base', API_BASE);
+                const WS_BASE = API_BASE.replace(/^http/i, 'ws');
+                const pageQuery = ref(window.location.search || '');
+
+                const adminId = ref('admin_001');
+                const adminQueue = ref([]);
+                const activeLeftTab = ref('queue');
+                const dbConversations = ref([]);
+                const adminConversationId = ref('');
+                const adminMessages = ref([]);
+                const selectedMessageIds = ref([]);
+                const adminReplyInput = ref('');
+                const adminWs = ref(null);
+
+                const llm = ref({
+                    llm_enabled: true,
+                    api_base: '',
+                    endpoint_path: '/v1/chat/completions',
+                    model: '',
+                    api_group: '',
+                    api_key_input: '',
+                    has_api_key: false,
+                    temperature: 0.7,
+                    top_p: 1,
+                    frequency_penalty: 0,
+                    presence_penalty: 0,
+                    max_tokens: 0,
+                    nonstream_http_fallback: true,
+                    chat_llm_http_stream: true,
+                });
+                const llmKeyDirty = ref(false);
+                const llmSaving = ref(false);
+                const llmTesting = ref(false);
+                const llmMessage = ref('');
+                const llmError = ref(false);
+                const ollamaLocalMode = ref(false);
+                const llmPresets = ref([]);
+                const selectedPresetId = ref('');
+
+                const loadLlmPresets = async () => {
+                    try {
+                        const resp = await fetch(`${API_BASE}/admin/llm-presets`);
+                        if (!resp.ok) return;
+                        const data = await resp.json();
+                        llmPresets.value = data.items || [];
+                    } catch {
+                        llmPresets.value = [];
+                    }
+                };
+
+                const fillDeepSeekBase = (modelId) => {
+                    ollamaLocalMode.value = false;
+                    llm.value.llm_enabled = true;
+                    llm.value.api_base = 'https://api.deepseek.com';
+                    llm.value.endpoint_path = '/chat/completions';
+                    llm.value.api_group = '';
+                    llm.value.model = modelId;
+                    llmMessage.value = '已填入 DeepSeek 官方地址与模型 id。请填写 API Key → Save → Test。';
+                    llmError.value = false;
+                };
+                const fillDeepSeekChat = () => fillDeepSeekBase('deepseek-chat');
+                const fillDeepSeekReasoner = () => fillDeepSeekBase('deepseek-reasoner');
+
+                const onOllamaToggle = () => {
+                    if (ollamaLocalMode.value) applyOllamaLocalPreset();
+                    else llmMessage.value = '已关闭 Ollama。请在「第三方 API」中填写 Base / Path / 模型 / Key。';
+                };
+
+                const applyOllamaLocalPreset = () => {
+                    if (!ollamaLocalMode.value) return;
+                    llm.value.llm_enabled = true;
+                    llm.value.api_base = 'http://127.0.0.1:11434';
+                    llm.value.endpoint_path = '/v1/chat/completions';
+                    llm.value.api_group = '';
+                    llm.value.api_key_input = '';
+                    llmKeyDirty.value = true;
+                    if (!llm.value.model) llm.value.model = 'qwen2.5:7b';
+                    llmMessage.value = 'Ollama 已填入。请确认本机 ollama serve 与模型名，Save 后 Test。';
+                    llmError.value = false;
+                };
+
+                const applySavedPreset = async () => {
+                    if (!selectedPresetId.value) return;
+                    try {
+                        const resp = await fetch(
+                            `${API_BASE}/admin/llm-presets/${encodeURIComponent(selectedPresetId.value)}/apply`,
+                            { method: 'POST' },
+                        );
+                        if (!resp.ok) throw new Error(await resp.text());
+                        llmError.value = false;
+                        llmMessage.value = 'Preset applied to active config (API key unchanged). Click Save if you also changed the key in the form.';
+                        await loadLlmConfig();
+                    } catch (e) {
+                        llmError.value = true;
+                        llmMessage.value = String(e);
+                    }
+                };
+
+                const saveNamedPreset = async () => {
+                    const name = window.prompt('Preset name (saved on server, no API key):', '');
+                    if (!name || !String(name).trim()) return;
+                    try {
+                        const resp = await fetch(`${API_BASE}/admin/llm-presets`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                name: String(name).trim(),
+                                api_base: llm.value.api_base,
+                                endpoint_path: llm.value.endpoint_path,
+                                model: llm.value.model,
+                                api_group: llm.value.api_group,
+                                temperature: Number(llm.value.temperature),
+                                top_p: Number(llm.value.top_p),
+                                frequency_penalty: Number(llm.value.frequency_penalty),
+                                presence_penalty: Number(llm.value.presence_penalty),
+                                max_tokens: parseInt(llm.value.max_tokens, 10) || 0,
+                            }),
+                        });
+                        if (resp.status === 409) {
+                            llmError.value = true;
+                            llmMessage.value = 'That preset name already exists. Choose another name.';
+                            return;
+                        }
+                        if (!resp.ok) throw new Error(await resp.text());
+                        await loadLlmPresets();
+                        llmError.value = false;
+                        llmMessage.value = 'Preset saved.';
+                    } catch (e) {
+                        llmError.value = true;
+                        llmMessage.value = String(e);
+                    }
+                };
+
+                const deleteSavedPreset = async () => {
+                    if (!selectedPresetId.value) return;
+                    if (!window.confirm('Delete this named preset from the server?')) return;
+                    try {
+                        const resp = await fetch(
+                            `${API_BASE}/admin/llm-presets/${encodeURIComponent(selectedPresetId.value)}`,
+                            { method: 'DELETE' },
+                        );
+                        if (!resp.ok) throw new Error(await resp.text());
+                        selectedPresetId.value = '';
+                        await loadLlmPresets();
+                        llmError.value = false;
+                        llmMessage.value = 'Preset deleted.';
+                    } catch (e) {
+                        llmError.value = true;
+                        llmMessage.value = String(e);
+                    }
+                };
+
+                const appendMessagesDedup = (targetRef, incomingMessages) => {
+                    const existed = new Set(targetRef.value.map(m => `${m.role}|${m.content}|${m.ts || ''}`));
+                    for (const m of incomingMessages || []) {
+                        const key = `${m.role}|${m.content}|${m.ts || ''}`;
+                        if (!existed.has(key)) {
+                            targetRef.value.push(m);
+                            existed.add(key);
+                        }
+                    }
+                };
+
+                const loadLlmConfig = async () => {
+                    llmMessage.value = '';
+                    try {
+                        const resp = await fetch(`${API_BASE}/admin/llm-config`);
+                        const data = await resp.json();
+                        llm.value.llm_enabled = data.llm_enabled !== false;
+                        llm.value.api_base = data.api_base || '';
+                        llm.value.endpoint_path = data.endpoint_path || '/v1/chat/completions';
+                        llm.value.model = data.model || '';
+                        llm.value.api_group = data.api_group || '';
+                        llm.value.has_api_key = !!data.has_api_key;
+                        llm.value.api_key_input = '';
+                        llm.value.temperature = data.temperature != null ? Number(data.temperature) : 0.7;
+                        llm.value.top_p = data.top_p != null ? Number(data.top_p) : 1;
+                        llm.value.frequency_penalty = data.frequency_penalty != null ? Number(data.frequency_penalty) : 0;
+                        llm.value.presence_penalty = data.presence_penalty != null ? Number(data.presence_penalty) : 0;
+                        llm.value.max_tokens = data.max_tokens != null ? parseInt(data.max_tokens, 10) : 0;
+                        llm.value.nonstream_http_fallback = data.nonstream_http_fallback !== false;
+                        llm.value.chat_llm_http_stream = data.chat_llm_http_stream !== false;
+                        ollamaLocalMode.value =
+                            (llm.value.api_base || '').replace(/\/+$/, '') === 'http://127.0.0.1:11434'
+                            && (llm.value.endpoint_path || '') === '/v1/chat/completions';
+                        llmKeyDirty.value = false;
+                    } catch (e) {
+                        llmError.value = true;
+                        llmMessage.value = 'Failed to load LLM config: ' + String(e);
+                    }
+                };
+
+                const saveLlmConfig = async () => {
+                    llmSaving.value = true;
+                    llmMessage.value = '';
+                    llmError.value = false;
+                    try {
+                        const body = {
+                            llm_enabled: !!llm.value.llm_enabled,
+                            api_base: llm.value.api_base,
+                            endpoint_path: llm.value.endpoint_path,
+                            model: llm.value.model,
+                            api_group: llm.value.api_group,
+                            temperature: Number(llm.value.temperature),
+                            top_p: Number(llm.value.top_p),
+                            frequency_penalty: Number(llm.value.frequency_penalty),
+                            presence_penalty: Number(llm.value.presence_penalty),
+                            max_tokens: parseInt(llm.value.max_tokens, 10) || 0,
+                            nonstream_http_fallback: !!llm.value.nonstream_http_fallback,
+                            chat_llm_http_stream: !!llm.value.chat_llm_http_stream,
+                        };
+                        if (llmKeyDirty.value) body.api_key = llm.value.api_key_input;
+                        const resp = await fetch(`${API_BASE}/admin/llm-config`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(body),
+                        });
+                        if (!resp.ok) throw new Error(await resp.text());
+                        llmMessage.value = 'Saved.';
+                        await loadLlmConfig();
+                    } catch (e) {
+                        llmError.value = true;
+                        llmMessage.value = String(e);
+                    } finally {
+                        llmSaving.value = false;
+                    }
+                };
+
+                const testLlmConfig = async () => {
+                    llmTesting.value = true;
+                    llmMessage.value = '';
+                    llmError.value = false;
+                    try {
+                        const resp = await fetch(`${API_BASE}/admin/llm-ping`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                        });
+                        const data = await resp.json();
+                        if (!resp.ok || !data.ok) {
+                            const reason = String(data.reason || resp.status);
+                            const msg = String(data.message || 'unknown error');
+                            const low = msg.toLowerCase();
+                            llmError.value = true;
+                            if (ollamaLocalMode.value && (low.includes('connection refused') || low.includes('failed to establish a new connection') || low.includes('timed out'))) {
+                                llmMessage.value = 'Ollama unreachable. Start Ollama first (`ollama serve`) and verify http://127.0.0.1:11434 is accessible.';
+                            } else if (ollamaLocalMode.value && low.includes('404')) {
+                                llmMessage.value = 'Ollama endpoint/model mismatch. Use endpoint `/v1/chat/completions` and a valid model from `ollama list`.';
+                            } else                             if (ollamaLocalMode.value && (low.includes('model') && (low.includes('not found') || low.includes('does not exist')))) {
+                                llmMessage.value = 'Ollama model not found locally. Run `ollama pull <model>` then test again.';
+                            } else if (low.includes('model not exist') || low.includes('model_not_exist') || (low.includes('invalid_request') && low.includes('model'))) {
+                                llmMessage.value = '接口返回「模型不存在」。DeepSeek 须填 API 注册的 id：deepseek-chat 或 deepseek-reasoner，不能填网页展示名如 DeepSeek-V3.2。点此区「填入 DeepSeek」按钮后 Save 再测。';
+                            } else {
+                                llmMessage.value = `Test failed (${reason}): ${msg}`;
+                            }
+                            return;
+                        }
+                        llmMessage.value = `Test success (${data.elapsed_ms} ms): ${data.reply_preview || ''}`;
+                    } catch (e) {
+                        llmError.value = true;
+                        llmMessage.value = 'Test request error: ' + String(e);
+                    } finally {
+                        llmTesting.value = false;
+                    }
+                };
+
+                const connectAdminWs = () => {
+                    if (adminWs.value) return;
+                    adminWs.value = new WebSocket(`${WS_BASE}/ws/admin/${encodeURIComponent(adminId.value)}`);
+                    adminWs.value.onmessage = async (evt) => {
+                        const data = JSON.parse(evt.data || '{}');
+                        if (data.type === 'queue_changed') await refreshAdminQueue();
+                        if (data.type === 'conversation_changed' && data.conversation_id === adminConversationId.value) {
+                            await selectAdminConversation(data.conversation_id);
+                            return;
+                        }
+                        if (data.type === 'conversation_update' && data.conversation_id === adminConversationId.value) {
+                            appendMessagesDedup(adminMessages, data.messages || []);
+                        }
+                    };
+                    adminWs.value.onclose = () => {
+                        adminWs.value = null;
+                        setTimeout(connectAdminWs, 1000);
+                    };
+                };
+
+                const refreshAdminQueue = async () => {
+                    const resp = await fetch(`${API_BASE}/admin/queue`);
+                    const data = await resp.json();
+                    adminQueue.value = data.items || [];
+                };
+
+                const loadDbConversations = async () => {
+                    const resp = await fetch(`${API_BASE}/admin/db/conversations?limit=80&offset=0`);
+                    const data = await resp.json();
+                    dbConversations.value = data.items || [];
+                };
+
+                const selectAdminConversation = async (cid) => {
+                    adminConversationId.value = cid;
+                    selectedMessageIds.value = [];
+                    const resp = await fetch(`${API_BASE}/admin/conversation/${cid}`);
+                    const data = await resp.json();
+                    adminMessages.value = data.messages || [];
+                    if (adminWs.value) {
+                        adminWs.value.send(JSON.stringify({ action: 'watch_conversation', conversation_id: cid }));
+                    }
+                };
+
+                const deleteSelectedMessages = async () => {
+                    if (!adminConversationId.value || !selectedMessageIds.value.length) return;
+                    if (!confirm(`Delete ${selectedMessageIds.value.length} message(s) from the database?`)) return;
+                    try {
+                        const resp = await fetch(`${API_BASE}/admin/messages/delete`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                conversation_id: adminConversationId.value,
+                                message_ids: selectedMessageIds.value,
+                            }),
+                        });
+                        if (!resp.ok) throw new Error(await resp.text());
+                        selectedMessageIds.value = [];
+                        await selectAdminConversation(adminConversationId.value);
+                    } catch (e) {
+                        alert(String(e));
+                    }
+                };
+
+                const clearAllAdminMessages = async () => {
+                    if (!adminConversationId.value) return;
+                    if (!confirm('Delete ALL messages in this conversation from the database?')) return;
+                    try {
+                        const resp = await fetch(`${API_BASE}/admin/messages/clear-all`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ conversation_id: adminConversationId.value }),
+                        });
+                        if (!resp.ok) throw new Error(await resp.text());
+                        selectedMessageIds.value = [];
+                        await selectAdminConversation(adminConversationId.value);
+                    } catch (e) {
+                        alert(String(e));
+                    }
+                };
+
+                const takeoverSelected = async () => {
+                    if (!adminConversationId.value) return;
+                    await fetch(`${API_BASE}/admin/takeover`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ conversation_id: adminConversationId.value, admin_id: adminId.value })
+                    });
+                    await selectAdminConversation(adminConversationId.value);
+                    await refreshAdminQueue();
+                };
+
+                const releaseSelected = async () => {
+                    if (!adminConversationId.value) return;
+                    await fetch(`${API_BASE}/admin/release`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ conversation_id: adminConversationId.value, admin_id: adminId.value, manual_risk: '低风险' })
+                    });
+                    await selectAdminConversation(adminConversationId.value);
+                    await refreshAdminQueue();
+                };
+
+                const sendAdminReply = async () => {
+                    if (!adminConversationId.value || !adminReplyInput.value.trim()) return;
+                    const text = adminReplyInput.value;
+                    adminReplyInput.value = '';
+                    await fetch(`${API_BASE}/admin/reply`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ conversation_id: adminConversationId.value, admin_id: adminId.value, text })
+                    });
+                    await selectAdminConversation(adminConversationId.value);
+                };
+
+                onMounted(async () => {
+                    connectAdminWs();
+                    refreshAdminQueue();
+                    await loadLlmConfig();
+                    await loadLlmPresets();
+                });
+
+                return {
+                    pageQuery,
+                    adminQueue, adminConversationId, adminMessages, selectedMessageIds, adminReplyInput,
+                    refreshAdminQueue, selectAdminConversation, takeoverSelected, releaseSelected, sendAdminReply,
+                    deleteSelectedMessages, clearAllAdminMessages,
+                    activeLeftTab, dbConversations, loadDbConversations,
+                    llm, llmKeyDirty, llmSaving, llmTesting, llmMessage, llmError, ollamaLocalMode,
+                    llmPresets, selectedPresetId,
+                    saveLlmConfig, testLlmConfig, onOllamaToggle, applyOllamaLocalPreset,
+                    fillDeepSeekChat, fillDeepSeekReasoner,
+                    applySavedPreset, saveNamedPreset, deleteSavedPreset,
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>

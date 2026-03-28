@@ -1,0 +1,1093 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>FYP WeChat-style Prototype</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
+    <style>
+        .wx-bg { background-color: #EDEDED; }
+        .wx-text-blue { color: #576B95; }
+        .wx-btn-green { background-color: #07C160; color: white; }
+        .wx-btn-green:disabled { background-color: #e1e1e1; color: #b2b2b2; }
+        
+        .grid-1 { grid-template-columns: 1fr; width: 65%; }
+        .grid-4 { grid-template-columns: repeat(2, 1fr); width: 66%; }
+        .grid-3 { grid-template-columns: repeat(3, 1fr); }
+        .img-square { aspect-ratio: 1/1; object-fit: cover; width: 100%; border-radius: 4px; }
+        
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        
+        .menu-pop-enter-active { transition: all 0.2s ease-out; }
+        .menu-pop-enter-from { width: 0; opacity: 0; }
+        .menu-pop-enter-to { width: 180px; opacity: 1; }
+
+        .status-grid-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 0.75rem;
+            cursor: pointer;
+        }
+        .status-grid-item:active { background-color: rgba(255, 255, 255, 0.1); }
+        .status-input {
+            width: 100%;
+            background: transparent;
+            outline: none;
+            color: #ffffff;
+            font-size: 1.25rem;
+            resize: none;
+        }
+        .status-input::placeholder { color: rgba(255, 255, 255, 0.7); }
+        .status-detail-bg { background: linear-gradient(180deg, #a8edea 0%, #fed6e3 100%); }
+        .bilingual-cn-en hr {
+            border: 0;
+            border-top: 1px solid rgba(0,0,0,0.12);
+            margin: 0.35rem 0;
+        }
+    </style>
+</head>
+<body class="wx-bg font-sans select-none">
+    <div id="app" class="max-w-md mx-auto h-screen flex flex-col bg-white shadow-2xl overflow-hidden relative">
+        
+        <!-- 朋友圈页面的返回按钮，直接绑定返回逻辑 -->
+        <header class="h-12 border-b flex items-center justify-between px-4 bg-[#EDEDED] flex-shrink-0 z-50">
+            <div class="flex items-center space-x-2">
+                <!-- 朋友圈页面，点击返回箭头，直接回到发现页 -->
+                <i v-if="currentPage === 'moments'" @click="currentPage = 'main'; activeTab = 'discover'; isCommenting = false;" class="ri-arrow-left-s-line text-2xl cursor-pointer"></i>
+                <i v-else-if="currentPage !== 'main'" @click="goBack(); isCommenting = false;" class="ri-arrow-left-s-line text-2xl cursor-pointer"></i>
+                <div class="flex flex-col leading-tight">
+                    <span class="font-bold text-[17px]">{{ headerTitle }}</span>
+                    <span v-if="headerTitleEn" class="text-[10px] text-gray-500 font-normal">{{ headerTitleEn }}</span>
+                </div>
+            </div>
+            <div v-if="currentPage === 'moments'">
+                <i @click="isPublishing = true" class="ri-camera-line text-2xl cursor-pointer"></i>
+            </div>
+            <div v-else-if="currentPage === 'main' && activeTab === 'chat'">
+                <div class="flex items-center gap-2">
+                    <button @click="debugVisible = !debugVisible" class="px-2 py-1 rounded border text-xs whitespace-nowrap">{{ debugVisible ? 'Hide Trace' : 'Show Trace' }}</button>
+                    <button @click="refreshMissingTranslations" class="px-2 py-1 rounded border text-xs whitespace-nowrap">Refresh EN</button>
+                    <button @click="clearChatHistory" class="px-2 py-1 rounded border text-xs whitespace-nowrap text-red-700 border-red-200">Clear chat</button>
+                </div>
+            </div>
+        </header>
+
+        <main class="flex-1 min-h-0 flex flex-col overflow-hidden relative bg-white">
+            
+            <div v-if="currentPage === 'main'" class="flex-1 min-h-0 flex flex-col overflow-hidden bg-[#EDEDED]">
+                
+                <section v-if="activeTab === 'chat'" class="bg-white flex-1 min-h-0 flex flex-col overflow-hidden">
+                    <div ref="chatScrollEl" class="flex-1 min-h-0 p-4 space-y-4 overflow-y-auto overflow-x-hidden hide-scrollbar">
+                        <div v-for="msg in chatHistory" :class="['flex', msg.role === 'user' ? 'flex-row-reverse' : '', msg.role === 'system' ? 'justify-center' : '']" class="items-start gap-2">
+                            <div v-if="msg.role !== 'system'" class="w-10 h-10 rounded bg-gray-200 flex-shrink-0 overflow-hidden">
+                                <img :src="msg.role === 'user' ? 'https://api.dicebear.com/7.x/avataaars/svg?seed=Felix' : 'https://api.dicebear.com/7.x/bottts/svg?seed=AI'" class="w-full">
+                            </div>
+                            <div :class="[msg.role === 'user' ? 'bg-[#95EC69]' : (msg.role === 'system' ? 'bg-[#F3F4F6] border border-gray-200 text-gray-600 text-[12px] px-3 py-1 rounded-full shadow-none leading-snug' : 'bg-white border'), msg.role === 'system' ? 'max-w-[92%]' : 'max-w-[70%]']" class="p-2 rounded-md text-[15px] shadow-sm bilingual-cn-en">
+                                <div class="whitespace-pre-wrap">{{ msg.content }}</div>
+                                <template v-if="msg.role !== 'system'">
+                                    <hr>
+                                    <div class="text-[11px] text-gray-600 leading-snug whitespace-pre-wrap">{{ chatMessageEn(msg) }}</div>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="p-3 border-t flex items-center space-x-2 bg-[#F7F7F7] flex-shrink-0">
+                        <input v-model="chatInput" @keyup.enter="sendChatMsg" class="flex-1 h-10 rounded border-none px-3 outline-none" placeholder="Type in Chinese… (connected to backend)">
+                        <button @click="sendChatMsg" class="wx-btn-green px-4 py-1.5 rounded">Send</button>
+                    </div>
+                    <div v-if="debugVisible" class="border-t bg-[#FAFAFA] p-2 text-[11px] text-gray-700 max-h-44 overflow-y-auto">
+                        <div class="font-bold mb-1">Trace (latest first)</div>
+                        <div v-for="(e, idx) in traceEvents" :key="idx" class="mb-1 border-b pb-1">
+                            <div><span class="font-medium">{{ e.ts }}</span> · <span class="text-[#576B95]">{{ e.type }}</span></div>
+                            <div class="whitespace-pre-wrap">{{ e.text }}</div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 发现页：只保留朋友圈，彻底删除扫一扫/摇一摇 -->
+                <section v-if="activeTab === 'discover'" class="flex-1 min-h-0 overflow-y-auto hide-scrollbar">
+                    <div class="mt-3 bg-white">
+                        <div @click="currentPage = 'moments'" class="flex items-center justify-between p-4 active:bg-gray-100 cursor-pointer">
+                            <div class="flex items-center space-x-4">
+                                <div class="bg-blue-500 w-6 h-6 rounded flex items-center justify-center">
+                                    <i class="ri-chrome-fill text-white text-sm"></i>
+                                </div>
+                                <div class="text-[16px] leading-tight">
+                                    <span>朋友圈</span>
+                                    <div class="text-[10px] text-gray-500 font-normal">Moments</div>
+                                </div>
+                            </div>
+                            <div class="flex items-center space-x-2">
+                                <div class="w-8 h-8 rounded overflow-hidden">
+                                    <img src="https://picsum.photos/100/100?random=1" class="w-full h-full object-cover">
+                                </div>
+                                <i class="ri-arrow-right-s-line text-gray-300 text-xl"></i>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section v-if="activeTab === 'me'" class="flex-1 min-h-0 overflow-y-auto hide-scrollbar">
+                    <div class="bg-white p-6 flex items-center space-x-4 mb-3">
+                        <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Felix" class="w-16 h-16 rounded-xl bg-gray-100">
+                        <div>
+                            <h2 class="text-xl font-bold">Cai (demo)</h2>
+                            <p class="text-gray-400 text-sm">WeChat ID: fyp_2026</p>
+                        </div>
+                    </div>
+                    <div @click="currentPage = 'statusSelect'" class="bg-white p-4 flex justify-between items-center cursor-pointer border-b">
+                        <div class="flex items-center space-x-3">
+                            <i class="ri-emotion-happy-line text-blue-500 text-xl"></i>
+                            <span>Status</span>
+                        </div>
+                        <span class="text-gray-400 text-sm" v-if="currentStatus">{{ currentStatus.label }} ></span>
+                        <span class="text-gray-400 text-sm" v-else>Not set ></span>
+                    </div>
+                    <a :href="'admin.html' + adminPageQuery" class="bg-white p-4 flex justify-between items-center cursor-pointer border-b text-inherit no-underline active:bg-gray-50">
+                        <div class="flex items-center space-x-3">
+                            <i class="ri-shield-user-line text-[#07C160] text-xl"></i>
+                            <div class="leading-tight">
+                                <span class="text-[16px]">管理后台</span>
+                                <div class="text-[10px] text-gray-500 font-normal">Admin — queue &amp; LLM API</div>
+                            </div>
+                        </div>
+                        <i class="ri-arrow-right-s-line text-gray-300 text-xl"></i>
+                    </a>
+                </section>
+            </div>
+
+            <!-- 朋友圈页面 -->
+            <section v-if="currentPage === 'moments'" class="bg-white flex-1 min-h-0 overflow-y-auto hide-scrollbar pb-20 relative">
+                <button
+                    type="button"
+                    @click="refreshMomentsTranslations"
+                    class="absolute top-3 right-3 z-30 px-2 py-1 rounded border text-[11px] bg-white/90"
+                >
+                    Refresh EN
+                </button>
+                <div class="h-72 bg-gray-400 relative mb-12">
+                    <img src="https://picsum.photos/800/600?random=20" class="w-full h-full object-cover">
+                    <div class="absolute -bottom-6 right-4 flex items-center space-x-4">
+                        <span class="text-white font-bold text-lg drop-shadow-md mb-6">蔡同学<span class="block text-xs font-normal opacity-90">Cai (demo)</span></span>
+                        <div class="w-16 h-16 rounded-lg bg-gray-100 border-2 border-white shadow-sm overflow-hidden">
+                            <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Felix" class="w-full h-full">
+                        </div>
+                    </div>
+                </div>
+
+                <div v-for="(post, index) in posts" :key="index" class="px-4 py-3 border-b flex space-x-3 items-start">
+                    <img :src="post.avatar" class="w-10 h-10 rounded flex-shrink-0">
+                    <div class="flex-1">
+                        <div class="wx-text-blue font-bold text-[15px]">{{ post.username }}</div>
+                        <div class="text-[15px] my-1 leading-relaxed bilingual-cn-en">
+                            <div class="whitespace-pre-wrap">{{ post.content }}</div>
+                            <hr>
+                            <div class="text-[11px] text-gray-600 whitespace-pre-wrap">{{ post.contentEn || momentContentEn(post.content) }}</div>
+                        </div>
+                        
+                        <div v-if="post.images.length > 0" :class="['grid gap-1 my-2', post.images.length === 4 ? 'grid-4' : (post.images.length === 1 ? 'grid-1' : 'grid-3')]">
+                            <img v-for="img in post.images" :src="img" class="img-square">
+                        </div>
+
+                        <div class="flex justify-between items-center mt-3 relative">
+                            <span class="text-gray-400 text-xs">{{ post.time }}<span class="block text-[10px] opacity-80">{{ post.timeEn || momentTimeEn(post.time) }}</span></span>
+                            <div class="bg-[#F7F7F7] px-2 py-0.5 rounded cursor-pointer" @click.stop="toggleCommentMenu(index)">
+                                <i class="ri-more-fill wx-text-blue text-xl"></i>
+                            </div>
+                            
+                            <transition name="menu-pop">
+                                <div v-if="commentMenuIndex === index" class="absolute right-10 bg-[#4C4C4C] text-white rounded-md flex h-9 items-center z-20 overflow-hidden">
+                                    <div class="flex-1 px-4 flex items-center border-r border-gray-600 text-sm whitespace-nowrap"><i class="ri-heart-line mr-1"></i>赞<span class="text-[10px] opacity-80 block leading-none">Like</span></div>
+                                    <div @click.stop="startComment(index)" class="flex-1 px-4 flex items-center text-sm whitespace-nowrap"><i class="ri-chat-3-line mr-1"></i>评论<span class="text-[10px] opacity-80 block leading-none">Comment</span></div>
+                                </div>
+                            </transition>
+                        </div>
+
+                        <div v-if="post.comments.length > 0" class="bg-[#F7F7F7] rounded-sm mt-2 p-2 text-[14px]">
+                            <div v-for="(c, ci) in post.comments" :key="ci + '-' + c.text" class="mb-1 bilingual-cn-en">
+                                <div><span class="wx-text-blue font-medium">{{ c.user }}:</span> {{ c.text }}</div>
+                                <hr>
+                                <div class="text-[11px] text-gray-600">{{ momentCommentEn(c.text) }}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 朋友圈发布弹窗 -->
+            <div v-if="isPublishing" class="fixed inset-0 z-[100] flex justify-center items-start">
+                <div class="w-full max-w-md h-screen bg-white flex flex-col">
+                    <header class="h-12 flex items-center justify-between px-4 bg-[#EDEDED]">
+                        <span @click="isPublishing = false" class="text-[16px]">Cancel</span>
+                        <button @click="handlePublish" :disabled="!momentText && images.length === 0" class="wx-btn-green px-4 py-1.5 rounded-md font-medium text-sm">Post</button>
+                    </header>
+                    <div class="p-4 flex-1">
+                        <textarea v-model="momentText" class="w-full h-32 outline-none text-[17px] resize-none border-none" placeholder="这一刻的想法…（中文）"></textarea>
+                        <p class="text-[11px] text-gray-500 mt-1">EN: Share this moment in Chinese above. English appears below your post after publishing.</p>
+                        
+                        <div class="grid grid-cols-3 gap-2 mt-4">
+                            <div v-for="(img, idx) in images" :key="idx" class="aspect-square relative">
+                                <img :src="img" class="w-full h-full object-cover rounded">
+                                <i @click="images.splice(idx, 1)" class="ri-close-circle-fill absolute -top-2 -right-2 text-red-500 bg-white rounded-full text-xl"></i>
+                            </div>
+                            <div v-if="images.length < 9" @click="triggerUpload" class="aspect-square bg-[#F7F7F7] flex items-center justify-center text-4xl text-gray-300 border-2 border-dashed border-gray-200">
+                                <i class="ri-add-line"></i>
+                            </div>
+                        </div>
+                        <input type="file" id="fileInput" hidden multiple @change="onFilesSelected">
+                    </div>
+                </div>
+            </div>
+
+            <!-- 状态选择页面 -->
+            <section v-if="currentPage === 'statusSelect'" class="bg-[#87A0B5] flex-1 min-h-0 flex flex-col overflow-hidden text-white">
+                <div class="h-16 flex items-center justify-between px-4">
+                    <i @click="currentPage = 'main'; activeTab = 'me';" class="ri-close-line text-3xl cursor-pointer"></i>
+                    <div class="text-center">
+                        <h2 class="text-2xl font-bold">Set Status</h2>
+                        <p class="text-sm opacity-70">Visible to friends for 24 hours</p>
+                    </div>
+                    <div class="w-8"></div>
+                </div>
+
+                <div class="px-4 mb-4">
+                    <div class="bg-white/10 rounded-xl p-6 flex flex-col items-center justify-center">
+                        <i class="ri-loader-4-line text-3xl mb-2"></i>
+                        <input v-model="customStatusText" @keyup.enter="pickCustomStatus" class="bg-transparent border-none outline-none text-center text-xl w-full" placeholder="Enter Status">
+                    </div>
+                </div>
+
+                <div class="px-4 mb-4">
+                    <p class="text-sm opacity-70 mb-2">Recently Used</p>
+                    <div class="flex space-x-3">
+                        <div @click="pickStatus(statusCats[0].items[0])" class="flex items-center space-x-1 bg-white/10 px-3 py-1 rounded-full cursor-pointer">
+                            <i class="ri-emotion-happy-line"></i>
+                            <span>Happy</span>
+                        </div>
+                        <div @click="pickStatus(statusCats[2].items[6])" class="flex items-center space-x-1 bg-white/10 px-3 py-1 rounded-full cursor-pointer">
+                            <i class="ri-headphone-line"></i>
+                            <span>Music</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex-1 overflow-y-auto px-4 hide-scrollbar">
+                    <div class="mb-6">
+                        <h4 class="text-sm opacity-70 mb-3">Feelings</h4>
+                        <div class="grid grid-cols-4 gap-3">
+                            <div v-for="s in statusCats[0].items" @click="pickStatus(s)" class="status-grid-item">
+                                <i :class="[s.icon, 'text-3xl mb-1']"></i>
+                                <span class="text-xs">{{ s.label }}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mb-6">
+                        <h4 class="text-sm opacity-70 mb-3">Work & Study</h4>
+                        <div class="grid grid-cols-4 gap-3">
+                            <div v-for="s in statusCats[1].items" @click="pickStatus(s)" class="status-grid-item">
+                                <i :class="[s.icon, 'text-3xl mb-1']"></i>
+                                <span class="text-xs">{{ s.label }}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mb-6">
+                        <h4 class="text-sm opacity-70 mb-3">Activities</h4>
+                        <div class="grid grid-cols-4 gap-3">
+                            <div v-for="s in statusCats[2].items" @click="pickStatus(s)" class="status-grid-item">
+                                <i :class="[s.icon, 'text-3xl mb-1']"></i>
+                                <span class="text-xs">{{ s.label }}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mb-6">
+                        <h4 class="text-sm opacity-70 mb-3">Breaks</h4>
+                        <div class="grid grid-cols-4 gap-3">
+                            <div v-for="s in statusCats[3].items" @click="pickStatus(s)" class="status-grid-item">
+                                <i :class="[s.icon, 'text-3xl mb-1']"></i>
+                                <span class="text-xs">{{ s.label }}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 状态详情 + 发布按钮 -->
+            <section v-if="currentPage === 'statusDetail'" class="status-detail-bg flex-1 min-h-0 flex flex-col overflow-hidden text-white">
+                <div class="h-12 flex items-center justify-between px-4">
+                    <i @click="currentPage = 'statusSelect'" class="ri-arrow-left-s-line text-2xl cursor-pointer"></i>
+                    <span class="font-bold text-[17px]">Status</span>
+                    <div class="w-8"></div>
+                </div>
+
+                <div class="flex-1 flex flex-col items-center justify-center">
+                    <div class="w-32 h-32 bg-white/20 rounded-full flex items-center justify-center mb-4">
+                        <i :class="[selectedStatus.icon, 'text-5xl']"></i>
+                    </div>
+                    <div class="text-2xl font-bold mb-2">
+                        {{ selectedStatus.label }}
+                    </div>
+                </div>
+
+                <div class="p-6">
+                    <button @click="commitStatus" class="wx-btn-green w-full py-3 rounded-lg text-center font-bold text-lg">Post status</button>
+                </div>
+            </section>
+        </main>
+
+        <!-- 主页面底部导航 -->
+        <nav v-if="currentPage === 'main'" class="h-16 border-t flex justify-around items-center bg-[#F7F7F7] flex-shrink-0 z-50">
+            <div v-for="tab in tabs" @click="activeTab = tab.id; isCommenting = false;" :class="['flex flex-col items-center cursor-pointer', activeTab === tab.id ? 'text-[#07C160]' : 'text-gray-600']">
+                <i :class="[activeTab === tab.id ? tab.iconActive : tab.icon, 'text-2xl']"></i>
+                <span class="text-[10px]">{{ tab.name }}</span>
+            </div>
+        </nav>
+
+        <!-- 评论框 -->
+        <div v-if="isCommenting" class="fixed bottom-0 left-1/2 -translate-x-1/2 p-3 bg-[#F7F7F7] border-t flex items-center space-x-2 z-[110] w-full max-w-md">
+            <input v-model="commentInput" autofocus class="flex-1 h-10 rounded border-none px-3 outline-none" placeholder="Comment (Chinese)">
+            <button @click="submitComment" class="wx-btn-green px-4 py-1.5 rounded">Send</button>
+        </div>
+
+        <div
+            v-if="eventToast.visible"
+            @click="openChatFromToast"
+            class="absolute top-14 left-1/2 -translate-x-1/2 z-[120] bg-black/80 text-white text-xs px-3 py-2 rounded-full cursor-pointer"
+        >
+            {{ eventToast.text }}
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, computed, nextTick, watch } = Vue;
+
+        createApp({
+            setup() {
+                const activeTab = ref('chat');
+                const currentPage = ref('main');
+                const headerTitle = computed(() => {
+                    if (currentPage.value === 'moments') return '朋友圈';
+                    if (currentPage.value === 'statusSelect') return 'Set Status';
+                    if (currentPage.value === 'statusDetail') return 'Status';
+                    if (activeTab.value === 'chat') return 'Chats';
+                    if (activeTab.value === 'discover') return 'Discover';
+                    return 'Me';
+                });
+
+                const headerTitleEn = computed(() => {
+                    if (currentPage.value === 'moments') return 'Moments';
+                    if (currentPage.value === 'statusSelect') return 'Choose a status';
+                    if (currentPage.value === 'statusDetail') return 'Preview';
+                    if (activeTab.value === 'chat') return 'Thread shows Chinese with English under each bubble';
+                    if (activeTab.value === 'discover') return 'Open Moments';
+                    return 'Profile';
+                });
+
+                const tabs = [
+                    { id: 'chat', name: 'Chats', icon: 'ri-chat-3-line', iconActive: 'ri-chat-3-fill' },
+                    { id: 'discover', name: 'Discover', icon: 'ri-compass-3-line', iconActive: 'ri-compass-3-fill' },
+                    { id: 'me', name: 'Me', icon: 'ri-user-3-line', iconActive: 'ri-user-3-fill' }
+                ];
+
+                const CHAT_LINE_EN = {
+                    '你好，我是心理辅助AI。': 'Hello, I am a mental-health support AI.',
+                    '已收到': 'Received.',
+                    '嗨，我是W，你的心理咨询师。': 'Hi, I am W, your psychological counselor.',
+                    '先说好了，不用紧张，不用想着要怎么“表达自己”先。': 'No pressure here. You do not need to figure out how to express yourself first.',
+                    '你就当多了个网友，想说话的时候说，不想说就不说，如果觉得为难的话，也可以不回复。': 'Think of me as an online friend. Talk when you want to, stay quiet when you do not, and if replying feels hard, you can leave it for now.',
+                    '今天怎么样？': 'How was your day today?',
+                };
+
+                const momentContentEn = (zh) => {
+                    const map = {
+                        '毕业设计进度如何了？': 'How is your graduation project going?',
+                        '终于跑通模型了，不容易！': 'Finally got the model running — not easy!',
+                    };
+                    if (map[zh]) return map[zh];
+                    if (!zh || !zh.trim()) return '—';
+                    return 'Your moment in Chinese above; add machine translation for a fuller English line in production.';
+                };
+
+                const momentTimeEn = (zh) => {
+                    const t = { '1小时前': '1 hour ago', '3小时前': '3 hours ago', '刚刚': 'Just now' };
+                    return t[zh] || '';
+                };
+
+                const momentCommentEn = (zh) => {
+                    const map = { '大佬带带我': 'Please teach me — I want to learn from you!' };
+                    return map[zh] || 'Comment in Chinese above.';
+                };
+
+                const chatMessageEn = (msg) => {
+                    if (msg.en) return msg.en;
+                    const t = msg.content || '';
+                    if (CHAT_LINE_EN[t]) return CHAT_LINE_EN[t];
+                    if (t.startsWith('后端连接失败')) return t.replace('后端连接失败', 'Backend connection failed').replace('Error', 'error');
+                    if (t.includes('检测到高风险内容')) return 'High-risk content detected. You have been transferred to a human moderator. Please wait.';
+                    if (t.includes('我在这里陪你')) return 'I am here with you. (Supportive reply; risk level and mental-state hints are in the Chinese line above.)';
+                    if (msg.role === 'user') return 'Your message in Chinese above.';
+                    return 'See the Chinese line above; demo UI — plug-in translation optional.';
+                };
+
+                // 朋友圈
+                const isPublishing = ref(false);
+                const momentText = ref('');
+                const images = ref([]);
+                const posts = ref([
+                    { avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Alice', username: '导师', content: '毕业设计进度如何了？', contentEn: 'How is your graduation project going?', images: [], time: '1小时前', timeEn: '1 hour ago', comments: [] },
+                    { avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Bob', username: '张同学', content: '终于跑通模型了，不容易！', contentEn: 'Finally got the model running — not easy!', images: ['https://picsum.photos/400/400?random=1'], time: '3小时前', timeEn: '3 hours ago', comments: [{user: '我', text: '大佬带带我'}] }
+                ]);
+
+                const triggerUpload = () => document.getElementById('fileInput').click();
+                const onFilesSelected = (e) => {
+                    const files = Array.from(e.target.files);
+                    files.forEach(f => {
+                        const reader = new FileReader();
+                        reader.onload = (ev) => images.value.push(ev.target.result);
+                        reader.readAsDataURL(f);
+                    });
+                };
+                const handlePublish = () => {
+                    const eventContent = momentText.value;
+                    const newPost = {
+                        avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Felix',
+                        username: '蔡同学',
+                        content: momentText.value,
+                        contentEn: momentContentEn(momentText.value),
+                        images: [...images.value],
+                        time: '刚刚',
+                        timeEn: momentTimeEn('刚刚'),
+                        comments: []
+                    };
+                    posts.value.unshift(newPost);
+                    if (eventContent && /[\u4e00-\u9fff]/.test(eventContent)) {
+                        translateToEnglish(eventContent, newPost).then(() => {
+                            if (newPost.en && String(newPost.en).trim()) newPost.contentEn = newPost.en;
+                        });
+                    }
+                    isPublishing.value = false;
+                    momentText.value = '';
+                    images.value = [];
+                    postUserEventAndAskAi('moments', eventContent);
+                };
+
+                // 评论
+                const commentMenuIndex = ref(-1);
+                const isCommenting = ref(false);
+                const commentInput = ref('');
+                const activePostIdx = ref(-1);
+
+                const toggleCommentMenu = (idx) => commentMenuIndex.value = (commentMenuIndex.value === idx ? -1 : idx);
+                const startComment = (idx) => {
+                    activePostIdx.value = idx;
+                    isCommenting.value = true;
+                    commentMenuIndex.value = -1;
+                };
+                const submitComment = () => {
+                    if(!commentInput.value) return;
+                    posts.value[activePostIdx.value].comments.push({ user: '我', text: commentInput.value });
+                    commentInput.value = '';
+                    isCommenting.value = false;
+                };
+
+                // 聊天
+                const defaultIntro = [
+                    { role: 'ai', content: '嗨，我是W，你的心理咨询师。', en: 'Hi, I am W, your psychological counselor.' },
+                    { role: 'ai', content: '先说好了，不用紧张，不用想着要怎么“表达自己”先。', en: 'No pressure here. You do not need to figure out how to express yourself first.' },
+                    { role: 'ai', content: '你就当多了个网友，想说话的时候说，不想说就不说，如果觉得为难的话，也可以不回复。', en: 'Think of me as an online friend. Talk when you want to, stay quiet when you do not, and if replying feels hard, you can leave it for now.' },
+                    { role: 'ai', content: '今天怎么样？', en: 'How was your day today?' },
+                ];
+                const cloneDefaultIntro = () =>
+                    defaultIntro.map((m, i) => ({
+                        role: m.role,
+                        content: m.content,
+                        en: m.en || '',
+                        ts: Date.now() + i,
+                    }));
+                const chatHistory = ref(cloneDefaultIntro());
+                const chatInput = ref('');
+                const apiFromQuery = new URLSearchParams(window.location.search).get('api');
+                const API_BASE = apiFromQuery || localStorage.getItem('fyp_api_base') || 'http://127.0.0.1:8010';
+                localStorage.setItem('fyp_api_base', API_BASE);
+                const adminPageQuery = ref(window.location.search || '');
+                const WS_BASE = API_BASE.replace(/^http/i, 'ws');
+                const userId = ref('user_demo_001');
+                const conversationId = ref('');
+                const userWs = ref(null);
+                const pendingJoinConversationId = ref('');
+                const isStreamingReply = ref(false);
+                const suppressNextWsAi = ref('');
+                const suppressNextWsAiNorm = ref('');
+                const suppressOneWsConversationUpdate = ref(false);
+                const debugVisible = ref(false);
+                const traceEvents = ref([]);
+                const eventToast = ref({ visible: false, text: '' });
+                let toastTimer = null;
+                const normalizeForCompare = (lineText) => {
+                    let s = String(lineText || '');
+                    s = s.replace(/\*\*/g, '');
+                    s = s.replace(/[\*`>#\-•]/g, '');
+                    s = s.replace(/^\d+\.\s+/gm, '');
+                    s = s.replace(/\s+/g, ' ').trim();
+                    return s;
+                };
+
+                const appendMessagesDedup = (targetRef, incomingMessages) => {
+                    const existed = new Set(targetRef.value.map(m => `${m.role}|${m.content}|${m.ts || ''}`));
+                    for (const m of incomingMessages || []) {
+                        const role = m?.role || '';
+                        const content = String(m?.content || '');
+                        // ignore empty assistant/admin messages from transient backend states
+                        if ((role === 'ai' || role === 'admin') && !content.trim()) continue;
+                        const key = `${m.role}|${m.content}|${m.ts || ''}`;
+                        if (!existed.has(key)) {
+                            targetRef.value.push(m);
+                            if ((m.role === 'user' || m.role === 'ai' || m.role === 'admin') && !m.en && String(m.content || '').trim()) {
+                                translateToEnglish(String(m.content || ''), m);
+                            }
+                            existed.add(key);
+                        }
+                    }
+                };
+
+                const addTrace = (type, text) => {
+                    const ts = new Date().toLocaleTimeString();
+                    traceEvents.value.unshift({ ts, type, text: String(text || '') });
+                    if (traceEvents.value.length > 80) traceEvents.value.length = 80;
+                };
+
+                const showEventToast = (text) => {
+                    eventToast.value = { visible: true, text: String(text || '') };
+                    if (toastTimer) clearTimeout(toastTimer);
+                    toastTimer = setTimeout(() => {
+                        eventToast.value.visible = false;
+                    }, 5000);
+                };
+
+                const chatScrollEl = ref(null);
+                const scrollChatToBottom = () => {
+                    nextTick(() => {
+                        requestAnimationFrame(() => {
+                            requestAnimationFrame(() => {
+                                const el = chatScrollEl.value;
+                                if (!el) return;
+                                el.scrollTop = el.scrollHeight;
+                            });
+                        });
+                    });
+                };
+
+                const openChatFromToast = async () => {
+                    eventToast.value.visible = false;
+                    activeTab.value = 'chat';
+                    currentPage.value = 'main';
+                    await loadLatestConversation();
+                    scrollChatToBottom();
+                };
+
+                const buildRiskHint = (pred, status) => {
+                    const risk = pred?.['风险等级'] || 'unknown';
+                    const action = pred?.action || 'unknown';
+                    const state = pred?.['心理状态'] || 'unknown';
+                    const types = Array.isArray(pred?.['问题类型']) ? pred['问题类型'].join(', ') : 'unknown';
+                    if (status === 'waiting_admin' || action === 'handoff_to_human') {
+                        return `System: risk=${risk}, mental_state=${state}, issue_types=${types}; handed off to human moderator.`;
+                    }
+                    return `System: risk=${risk}, mental_state=${state}, issue_types=${types} (action=${action}).`;
+                };
+
+                const translateToEnglish = async (text, msgObj) => {
+                    try {
+                        const resp = await fetch(`${API_BASE}/chat/translate`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ text }),
+                        });
+                        if (!resp.ok) return;
+                        const data = await resp.json();
+                        if (msgObj && typeof data.en === 'string' && data.en.trim()) {
+                            msgObj.en = data.en.trim();
+                        }
+                    } catch {
+                        // keep graceful fallback in chatMessageEn()
+                    }
+                };
+
+                const refreshMissingTranslations = async () => {
+                    for (const m of chatHistory.value) {
+                        if ((m.role === 'user' || m.role === 'ai' || m.role === 'admin') && (!m.en || !String(m.en).trim()) && m.content && String(m.content).trim()) {
+                            await translateToEnglish(m.content, m);
+                        }
+                    }
+                };
+
+                const refreshMomentsTranslations = async () => {
+                    for (const p of posts.value) {
+                        const zh = String(p.content || '').trim();
+                        if (zh && /[\u4e00-\u9fff]/.test(zh)) {
+                            await translateToEnglish(zh, p);
+                            if (p.en && String(p.en).trim()) p.contentEn = p.en;
+                        }
+                    }
+                };
+
+                const postUserEventAndAskAi = async (eventType, content) => {
+                    const text = String(content || '').trim();
+                    if (!text) return;
+                    try {
+                        const resp = await fetch(`${API_BASE}/chat/user-event`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ user_id: userId.value, event_type: eventType, content: text })
+                        });
+                        if (!resp.ok) throw new Error(await resp.text());
+                        const data = await resp.json();
+                        conversationId.value = data.conversation_id || conversationId.value;
+                        pendingJoinConversationId.value = conversationId.value;
+                        if (userWs.value && conversationId.value && userWs.value.readyState === WebSocket.OPEN) {
+                            userWs.value.send(JSON.stringify({ conversation_id: conversationId.value }));
+                        }
+                        showEventToast(`W 看到了你的${eventType === 'moments' ? '朋友圈' : '状态'}，点我查看回复`);
+                        await loadLatestConversation();
+                    } catch (e) {
+                        addTrace('event.error', `${eventType}: ${String(e)}`);
+                    }
+                };
+
+                const clearChatHistory = async () => {
+                    if (!confirm('清除当前对话的全部消息？将同步删除数据库中的记录，且不可撤销。')) return;
+                    try {
+                        const body = { user_id: userId.value };
+                        if (conversationId.value) body.conversation_id = conversationId.value;
+                        const resp = await fetch(`${API_BASE}/chat/clear`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(body),
+                        });
+                        if (!resp.ok) throw new Error(await resp.text());
+                        addTrace('chat.clear', 'ok');
+                        await loadLatestConversation();
+                    } catch (e) {
+                        addTrace('chat.clear.error', String(e));
+                    }
+                };
+
+                const loadLatestConversation = async () => {
+                    try {
+                        const url = `${API_BASE}/chat/latest/${encodeURIComponent(userId.value)}?_=${Date.now()}`;
+                        const resp = await fetch(url, { cache: 'no-store' });
+                        if (!resp.ok) {
+                            addTrace('chat.latest', `HTTP ${resp.status}`);
+                            return;
+                        }
+                        const data = await resp.json();
+                        if (!data?.found) {
+                            addTrace('chat.latest', 'found=false');
+                            conversationId.value = '';
+                            pendingJoinConversationId.value = '';
+                            chatHistory.value = cloneDefaultIntro();
+                            scrollChatToBottom();
+                            return;
+                        }
+                        if (!Array.isArray(data.messages)) {
+                            addTrace('chat.latest', 'messages not an array');
+                            return;
+                        }
+                        conversationId.value = data.conversation_id || conversationId.value;
+                        pendingJoinConversationId.value = conversationId.value;
+                        if (data.messages.length === 0) {
+                            chatHistory.value = cloneDefaultIntro();
+                        } else {
+                            chatHistory.value = data.messages.map(m => ({
+                                id: m.id != null ? m.id : undefined,
+                                role: m.role,
+                                content: String(m.content || ''),
+                                ts: m.ts || Date.now(),
+                                en: ''
+                            }));
+                        }
+                        await refreshMissingTranslations();
+                        if (userWs.value && conversationId.value && userWs.value.readyState === WebSocket.OPEN) {
+                            try {
+                                userWs.value.send(JSON.stringify({ conversation_id: conversationId.value }));
+                            } catch (e) {
+                                console.warn('ws join send failed:', e);
+                            }
+                        }
+                        scrollChatToBottom();
+                    } catch (e) {
+                        addTrace('chat.latest.error', String(e));
+                    }
+                };
+
+                watch(activeTab, (tab) => {
+                    if (tab === 'chat') scrollChatToBottom();
+                });
+                watch(
+                    chatHistory,
+                    () => scrollChatToBottom(),
+                    { deep: true },
+                );
+
+                const connectUserWs = () => {
+                    if (userWs.value) return;
+                    userWs.value = new WebSocket(`${WS_BASE}/ws/user/${encodeURIComponent(userId.value)}`);
+                    userWs.value.onopen = () => {
+                        const cid = conversationId.value || pendingJoinConversationId.value;
+                        if (cid) {
+                            try {
+                                userWs.value.send(JSON.stringify({ conversation_id: cid }));
+                            } catch (e) {
+                                console.warn('ws join on open failed:', e);
+                            }
+                        }
+                    };
+                    userWs.value.onmessage = (evt) => {
+                        try {
+                            if (isStreamingReply.value) return;
+                            const data = JSON.parse(evt.data || '{}');
+                            if (data.type === 'joined_conversation') {
+                                addTrace('ws.joined', data.conversation_id || '');
+                                return;
+                            }
+                            if (data.type === 'conversation_cleared' || data.type === 'messages_deleted') {
+                                if (data.conversation_id && data.conversation_id === conversationId.value) {
+                                    loadLatestConversation();
+                                }
+                                return;
+                            }
+                            if (data.type !== 'conversation_update') return;
+                            if (suppressOneWsConversationUpdate.value) {
+                                suppressOneWsConversationUpdate.value = false;
+                                addTrace('ws.skip', 'dedupe post-stream broadcast');
+                                return;
+                            }
+                            addTrace('ws.conversation_update', JSON.stringify({ status: data.status, messages: (data.messages || []).length }));
+                            const incoming = data.messages || [];
+                            const lastAi = [...chatHistory.value].reverse().find(m => m.role === 'ai');
+                            const incomingAi = [...incoming].reverse().find(m => m.role === 'ai');
+                            const norm = normalizeForCompare;
+                            if (incomingAi && suppressNextWsAi.value && norm(incomingAi.content) === norm(suppressNextWsAi.value)) {
+                                suppressNextWsAi.value = '';
+                                suppressNextWsAiNorm.value = '';
+                                return;
+                            }
+                            if (incomingAi && suppressNextWsAiNorm.value && norm(incomingAi.content).includes(suppressNextWsAiNorm.value)) {
+                                suppressNextWsAi.value = '';
+                                suppressNextWsAiNorm.value = '';
+                                return;
+                            }
+                            if (lastAi && incomingAi && lastAi.content === incomingAi.content) {
+                                return;
+                            }
+                            if (incomingAi && !String(incomingAi.content || '').trim() && lastAi && String(lastAi.content || '').trim()) {
+                                return;
+                            }
+                            appendMessagesDedup(chatHistory, incoming);
+                            scrollChatToBottom();
+                        } catch (e) {
+                            console.warn('ws onmessage parse failed:', e);
+                        }
+                    };
+                    userWs.value.onclose = () => {
+                        userWs.value = null;
+                        setTimeout(connectUserWs, 1000);
+                    };
+                };
+                const sendChatMsg = async () => {
+                    if(!chatInput.value.trim()) return;
+                    const text = chatInput.value;
+                    const reqPayload = { user_id: userId.value, text, stream: true };
+                    const userMsg = { role: 'user', content: text, ts: Date.now(), en: '' };
+                    chatHistory.value.push(userMsg);
+                    chatInput.value = '';
+                    translateToEnglish(text, userMsg);
+                    isStreamingReply.value = true;
+                    addTrace('http.request', JSON.stringify(reqPayload, null, 0));
+
+                    const sanitizeAssistantFinal = (raw) => {
+                        let s = String(raw || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+                        s = s.replace(/```[\s\S]*?```/g, ' ');
+                        s = s.replace(/`([^`]+)`/g, '$1');
+                        s = s.replace(/\*\*([^*]+)\*\*/g, '$1');
+                        s = s.replace(/\*([^*]+)\*/g, '$1');
+                        s = s.replace(/^#{1,6}\s+/gm, '');
+                        const lines = s.split('\n').map((l) => l.trim()).filter(Boolean);
+                        const cleaned = lines
+                            .map((line) => {
+                                line = line.replace(/^(回答你的问题|生成文本|翻译语言|以下是|总结|功能包括|我的能力)[：:\s]+/i, '');
+                                line = line.replace(/^[\-\*•]+\s+/, '');
+                                line = line.replace(/^\d+[.)）、]\s*/, '');
+                                return line;
+                            })
+                            .filter(Boolean);
+                        return cleaned.join(' ').replace(/\s{2,}/g, ' ').trim();
+                    };
+                    const sanitizeStreamingAcc = (acc) =>
+                        String(acc || '')
+                            .replace(/\*\*/g, '')
+                            .replace(/`/g, '')
+                            .replace(/^#{1,6}\s+/gm, '');
+
+                    const splitReplyIntoBubbles = (text) => {
+                        const s = String(text || '').trim();
+                        if (!s) return [];
+                        const parts = [];
+                        let cur = '';
+                        let i = 0;
+                        while (i < s.length) {
+                            if (i + 1 < s.length && s.slice(i, i + 2) === '……') {
+                                cur += '……';
+                                i += 2;
+                                const seg = cur.trim();
+                                if (seg) parts.push(seg);
+                                cur = '';
+                                continue;
+                            }
+                            const ch = s[i++];
+                            cur += ch;
+                            if ('。！？'.includes(ch)) {
+                                const seg = cur.trim();
+                                if (seg) parts.push(seg);
+                                cur = '';
+                            }
+                        }
+                        const tail = cur.trim();
+                        if (tail) parts.push(tail);
+                        return parts.length ? parts : [s];
+                    };
+
+                    let streamAcc = '';
+                    let streamingMsg = null;
+                    let hasPushedAi = false;
+                    const aiToTranslate = [];
+
+                    const applyStreamingBubble = () => {
+                        const display = sanitizeStreamingAcc(streamAcc);
+                        if (!display) return;
+                        if (!streamingMsg) {
+                            streamingMsg = { role: 'ai', content: display, ts: Date.now(), en: '' };
+                            chatHistory.value.push(streamingMsg);
+                            hasPushedAi = true;
+                        } else {
+                            streamingMsg.content = display;
+                        }
+                    };
+                    const finalizeAiBubble = (payload) => {
+                        const rawFromDone = payload && payload.reply != null ? payload.reply : '';
+                        let parts = Array.isArray(payload?.reply_parts)
+                            ? payload.reply_parts.map((x) => String(x || '').trim()).filter(Boolean)
+                            : [];
+                        const raw = String(rawFromDone || '').trim() || streamAcc;
+                        let finalText = sanitizeAssistantFinal(raw);
+                        if (!finalText && raw) finalText = raw.replace(/\s+/g, ' ').trim();
+                        if (!parts.length && finalText) parts = splitReplyIntoBubbles(finalText);
+                        if (!parts.length) return '';
+                        if (parts.length === 1) {
+                            finalText = parts[0];
+                            if (!streamingMsg) {
+                                streamingMsg = { role: 'ai', content: finalText, ts: Date.now(), en: '' };
+                                chatHistory.value.push(streamingMsg);
+                                hasPushedAi = true;
+                            } else {
+                                streamingMsg.content = finalText;
+                            }
+                            aiToTranslate.length = 0;
+                            aiToTranslate.push(streamingMsg);
+                            suppressNextWsAi.value = finalText;
+                            suppressNextWsAiNorm.value = normalizeForCompare(finalText);
+                            streamAcc = '';
+                            return finalText;
+                        }
+                        const idx = streamingMsg ? chatHistory.value.indexOf(streamingMsg) : -1;
+                        if (idx >= 0) chatHistory.value.splice(idx, 1);
+                        streamingMsg = null;
+                        for (const p of parts) {
+                            const m = { role: 'ai', content: p, ts: Date.now(), en: '' };
+                            chatHistory.value.push(m);
+                            aiToTranslate.push(m);
+                        }
+                        hasPushedAi = true;
+                        suppressNextWsAi.value = parts.join('');
+                        suppressNextWsAiNorm.value = normalizeForCompare(parts.join(''));
+                        streamAcc = '';
+                        return parts[parts.length - 1];
+                    };
+                    const pushErrorBubble = (errLine) => {
+                        const c = String(errLine || '').trim();
+                        if (!c) return;
+                        const m = { role: 'ai', content: c, ts: Date.now(), en: '' };
+                        chatHistory.value.push(m);
+                        hasPushedAi = true;
+                        translateToEnglish(c, m);
+                    };
+
+                    try {
+                        const resp = await fetch(`${API_BASE}/chat/send`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(reqPayload)
+                        });
+                        if (!resp.ok) {
+                            const errText = await resp.text();
+                            throw new Error(errText || resp.statusText);
+                        }
+                        addTrace('http.response', `status=${resp.status} content-type=${resp.headers.get('content-type') || ''}`);
+                        const reader = resp.body.getReader();
+                        const dec = new TextDecoder();
+                        let carry = '';
+                        let lastDoneStatus = '';
+                        const parseLine = (line) => {
+                            const t = line.trim();
+                            if (!t.startsWith('data:')) return;
+                            let payload;
+                            try {
+                                payload = JSON.parse(t.slice(5).trim());
+                            } catch {
+                                return;
+                            }
+                            if (payload.type === 'meta') {
+                                conversationId.value = payload.conversation_id || conversationId.value;
+                                addTrace('sse.meta', JSON.stringify({ conversation_id: payload.conversation_id, status: payload.status, prediction: payload.prediction }, null, 0));
+                                const risk = payload?.prediction?.['风险等级'];
+                                const s = payload?.status;
+                                if (risk || payload?.prediction?.action) {
+                                    const hint = buildRiskHint(payload?.prediction || {}, s);
+                                    const prev = chatHistory.value[chatHistory.value.length - 1];
+                                    if (!(prev && prev.role === 'system' && prev.content === hint)) {
+                                        chatHistory.value.push({ role: 'system', content: hint, ts: Date.now() });
+                                    }
+                                }
+                                if (userWs.value && conversationId.value && userWs.value.readyState === WebSocket.OPEN) {
+                                    try {
+                                        userWs.value.send(JSON.stringify({ conversation_id: conversationId.value }));
+                                    } catch (e) {
+                                        console.warn('ws send failed:', e);
+                                    }
+                                }
+                            } else if (payload.type === 'chunk' && payload.text) {
+                                streamAcc += payload.text;
+                                applyStreamingBubble();
+                            } else if (payload.type === 'system' && payload.content) {
+                                chatHistory.value.push({ role: 'system', content: String(payload.content), ts: Date.now() });
+                            } else if (payload.type === 'done') {
+                                conversationId.value = payload.conversation_id || conversationId.value;
+                                lastDoneStatus = String(payload.status || '');
+                                addTrace('sse.done', JSON.stringify({ conversation_id: payload.conversation_id, status: payload.status, reply_len: String(payload.reply || '').length, bubbles: Array.isArray(payload.reply_parts) ? payload.reply_parts.length : 0 }, null, 0));
+                                suppressOneWsConversationUpdate.value = true;
+                                finalizeAiBubble(payload);
+                            }
+                        };
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            if (done) break;
+                            carry += dec.decode(value, { stream: true });
+                            const lines = carry.split('\n');
+                            carry = lines.pop() || '';
+                            for (const raw of lines) parseLine(raw);
+                        }
+                        parseLine(carry);
+                        if (!hasPushedAi && lastDoneStatus !== 'waiting_admin' && lastDoneStatus !== 'admin') {
+                            pushErrorBubble('已收到');
+                        }
+                        (async () => {
+                            for (const m of aiToTranslate) {
+                                await translateToEnglish(m.content, m);
+                            }
+                        })();
+                    } catch (e) {
+                        addTrace('error', String(e));
+                        pushErrorBubble(`后端连接失败: ${String(e)}`);
+                    } finally {
+                        isStreamingReply.value = false;
+                        scrollChatToBottom();
+                    }
+                };
+
+                connectUserWs();
+                loadLatestConversation();
+
+                // 状态
+                const currentStatus = ref(null);
+                const selectedStatus = ref(null);
+                const customStatusText = ref('');
+                const statusCats = [
+                    { name: 'Feelings', items: [
+                        { label: 'Happy', icon: 'ri-emotion-happy-line' },
+                        { label: 'Broken', icon: 'ri-heart-broken-line' },
+                        { label: 'Luck', icon: 'ri-refresh-line' },
+                        { label: 'Energetic', icon: 'ri-sun-line' },
+                        { label: 'Exhausted', icon: 'ri-user-received-line' },
+                        { label: 'Fighting', icon: 'ri-user-5-line' },
+                    ]},
+                    { name: 'Work', items: [
+                        { label: 'Studying', icon: 'ri-pencil-line' },
+                        { label: 'Busy', icon: 'ri-user-3-line' },
+                        { label: 'Working', icon: 'ri-brief-line' },
+                    ]},
+                    { name: 'Activities', items: [
+                        { label: 'Coffee', icon: 'ri-coffee-line' },
+                        { label: 'Music', icon: 'ri-headphone-line' },
+                        { label: 'Eating', icon: 'ri-bowl-line' },
+                    ]},
+                    { name: 'Breaks', items: [
+                        { label: 'Sleeping', icon: 'ri-sleeping-line' },
+                        { label: 'Gaming', icon: 'ri-game-line' },
+                    ]}
+                ];
+
+                const pickStatus = (s) => { 
+                    selectedStatus.value = s; 
+                    currentPage.value = 'statusDetail'; 
+                };
+
+                const pickCustomStatus = () => {
+                    if(!customStatusText.value.trim()) return;
+                    selectedStatus.value = { 
+                        label: customStatusText.value, 
+                        icon: 'ri-emotion-happy-line' 
+                    };
+                    currentPage.value = 'statusDetail';
+                    customStatusText.value = '';
+                };
+
+                const commitStatus = () => {
+                    currentStatus.value = selectedStatus.value;
+                    const statusText = selectedStatus.value?.label || '';
+                    currentPage.value = 'main';
+                    activeTab.value = 'me';
+                    if (currentStatus.value && statusText && /[\u4e00-\u9fff]/.test(statusText)) {
+                        translateToEnglish(statusText, currentStatus.value);
+                    }
+                    postUserEventAndAskAi('status', statusText);
+                };
+
+                const goBack = () => {
+                    isCommenting.value = false;
+                    if (currentPage.value === 'statusDetail') {
+                        currentPage.value = 'statusSelect';
+                    } else {
+                        currentPage.value = 'main';
+                    }
+                };
+
+                return {
+                    activeTab, currentPage, headerTitle, headerTitleEn, tabs, adminPageQuery,
+                    chatScrollEl,
+                    chatHistory, chatInput, sendChatMsg, chatMessageEn,
+                    momentContentEn, momentTimeEn, momentCommentEn, refreshMomentsTranslations,
+                    posts, isPublishing, momentText, images, triggerUpload, onFilesSelected, handlePublish,
+                    commentMenuIndex, isCommenting, commentInput, toggleCommentMenu, startComment, submitComment,
+                    refreshMissingTranslations, clearChatHistory,
+                    debugVisible, traceEvents, eventToast, openChatFromToast,
+                    statusCats, pickStatus, selectedStatus, currentStatus, customStatusText, pickCustomStatus, commitStatus,
+                    goBack
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
