@@ -228,15 +228,24 @@ def s3_to_risk_level(s3_pred_id: int):
 def format_prediction(s1_pred_ids, s2_pred_id, s3_pred_id, s1_threshold: float = 0.15):
     """
     将模型输出转成前端需要的结构。
+    若 checkpoint 的 head 维度与当前 S1/S2/S3 标签表不一致，则裁剪索引，避免 IndexError。
     """
-    problem_types = [S1_ID2ZH[S1_LABELS[i]] for i in s1_pred_ids]
+    s1_ids = [i for i in s1_pred_ids if isinstance(i, int) and 0 <= i < len(S1_LABELS)]
+    problem_types = [S1_ID2ZH[S1_LABELS[i]] for i in s1_ids]
 
     # 去重 + 排序（避免阈值导致乱序）
     problem_types = sorted(set(problem_types))
 
+    s2_idx = int(s2_pred_id)
+    if not (0 <= s2_idx < len(S2_LABELS)):
+        s2_idx = min(max(s2_idx, 0), len(S2_LABELS) - 1) if S2_LABELS else 0
+    s3_idx = int(s3_pred_id)
+    if not (0 <= s3_idx < len(S3_LABELS)):
+        s3_idx = min(max(s3_idx, 0), len(S3_LABELS) - 1) if S3_LABELS else 0
+
     return {
         "问题类型": problem_types if problem_types else ["其他"],
-        "心理状态": S2_ID2ZH[S2_LABELS[s2_pred_id]],
-        "风险等级": s3_to_risk_level(s3_pred_id),
+        "心理状态": S2_ID2ZH[S2_LABELS[s2_idx]],
+        "风险等级": s3_to_risk_level(s3_idx),
     }
 

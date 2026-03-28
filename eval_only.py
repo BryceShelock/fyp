@@ -17,8 +17,9 @@ from sklearn.metrics import (
 
 from transformers import BertTokenizer
 
-from multitask_config import map_s1, map_s2, map_s3, S1_LABELS, S2_LABELS, S3_LABELS
+from multitask_config import S1_LABELS, S2_LABELS, S3_LABELS
 from multitask_model import MultiTaskBertForPsychology
+from multitask_data import load_multitask_supervision
 
 
 def set_seed(seed: int):
@@ -202,12 +203,8 @@ def main():
     if args.max_samples and args.max_samples > 0:
         df = df.sample(n=args.max_samples, random_state=args.seed).reset_index(drop=True)
 
-    texts = df["text"].astype(str).tolist()
-    weibo_labels = df["label"].tolist()
-
-    labels_s1 = [map_s1(t) for t in texts]
-    labels_s2 = [map_s2(int(x)) for x in weibo_labels]
-    labels_s3 = [map_s3(t) for t in texts]
+    texts, labels_s1, labels_s2, labels_s3, csv_format = load_multitask_supervision(df)
+    print(f"[data] format={csv_format} n={len(texts)}")
 
     s1_mat = np.asarray(labels_s1, dtype=np.float32)
     n_pos = int((s1_mat.sum(axis=1) > 0).sum())

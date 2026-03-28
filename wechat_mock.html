@@ -67,22 +67,31 @@
             <div v-if="currentPage === 'moments'">
                 <i @click="isPublishing = true" class="ri-camera-line text-2xl cursor-pointer"></i>
             </div>
+            <div v-else-if="currentPage === 'main' && activeTab === 'chat'">
+                <div class="flex items-center gap-2">
+                    <button @click="debugVisible = !debugVisible" class="px-2 py-1 rounded border text-xs whitespace-nowrap">{{ debugVisible ? 'Hide Trace' : 'Show Trace' }}</button>
+                    <button @click="refreshMissingTranslations" class="px-2 py-1 rounded border text-xs whitespace-nowrap">Refresh EN</button>
+                    <button @click="clearChatHistory" class="px-2 py-1 rounded border text-xs whitespace-nowrap text-red-700 border-red-200">Clear chat</button>
+                </div>
+            </div>
         </header>
 
-        <main class="flex-1 overflow-y-auto hide-scrollbar relative bg-white">
+        <main class="flex-1 min-h-0 flex flex-col overflow-hidden relative bg-white">
             
-            <div v-if="currentPage === 'main'" class="h-full bg-[#EDEDED]">
+            <div v-if="currentPage === 'main'" class="flex-1 min-h-0 flex flex-col overflow-hidden bg-[#EDEDED]">
                 
-                <section v-if="activeTab === 'chat'" class="bg-white h-full flex flex-col">
-                    <div class="flex-1 p-4 space-y-4 overflow-y-auto hide-scrollbar">
-                        <div v-for="msg in chatHistory" :class="['flex', msg.role === 'user' ? 'flex-row-reverse' : '']" class="items-start gap-2">
-                            <div class="w-10 h-10 rounded bg-gray-200 flex-shrink-0 overflow-hidden">
+                <section v-if="activeTab === 'chat'" class="bg-white flex-1 min-h-0 flex flex-col overflow-hidden">
+                    <div ref="chatScrollEl" class="flex-1 min-h-0 p-4 space-y-4 overflow-y-auto overflow-x-hidden hide-scrollbar">
+                        <div v-for="msg in chatHistory" :class="['flex', msg.role === 'user' ? 'flex-row-reverse' : '', msg.role === 'system' ? 'justify-center' : '']" class="items-start gap-2">
+                            <div v-if="msg.role !== 'system'" class="w-10 h-10 rounded bg-gray-200 flex-shrink-0 overflow-hidden">
                                 <img :src="msg.role === 'user' ? 'https://api.dicebear.com/7.x/avataaars/svg?seed=Felix' : 'https://api.dicebear.com/7.x/bottts/svg?seed=AI'" class="w-full">
                             </div>
-                            <div :class="[msg.role === 'user' ? 'bg-[#95EC69]' : 'bg-white border']" class="p-2 rounded-md max-w-[70%] text-[15px] shadow-sm bilingual-cn-en">
+                            <div :class="[msg.role === 'user' ? 'bg-[#95EC69]' : (msg.role === 'system' ? 'bg-[#F3F4F6] border border-gray-200 text-gray-600 text-[12px] px-3 py-1 rounded-full shadow-none leading-snug' : 'bg-white border'), msg.role === 'system' ? 'max-w-[92%]' : 'max-w-[70%]']" class="p-2 rounded-md text-[15px] shadow-sm bilingual-cn-en">
                                 <div class="whitespace-pre-wrap">{{ msg.content }}</div>
-                                <hr>
-                                <div class="text-[11px] text-gray-600 leading-snug whitespace-pre-wrap">{{ chatMessageEn(msg) }}</div>
+                                <template v-if="msg.role !== 'system'">
+                                    <hr>
+                                    <div class="text-[11px] text-gray-600 leading-snug whitespace-pre-wrap">{{ chatMessageEn(msg) }}</div>
+                                </template>
                             </div>
                         </div>
                     </div>
@@ -90,38 +99,17 @@
                         <input v-model="chatInput" @keyup.enter="sendChatMsg" class="flex-1 h-10 rounded border-none px-3 outline-none" placeholder="Type in Chinese… (connected to backend)">
                         <button @click="sendChatMsg" class="wx-btn-green px-4 py-1.5 rounded">Send</button>
                     </div>
-                </section>
-
-                <section v-if="activeTab === 'admin'" class="bg-white h-full flex">
-                    <div class="w-[42%] border-r overflow-y-auto">
-                        <div class="p-3 border-b flex justify-between items-center">
-                            <span class="font-bold">Queue</span>
-                            <button @click="refreshAdminQueue" class="text-xs px-2 py-1 border rounded">Refresh</button>
-                        </div>
-                        <div v-for="item in adminQueue" :key="item.conversation_id" class="p-3 border-b cursor-pointer active:bg-gray-100" @click="selectAdminConversation(item.conversation_id)">
-                            <div class="text-xs text-gray-500">{{ item.user_id }}</div>
-                            <div class="text-sm truncate">{{ item.last_user_message || '(empty)' }}</div>
-                        </div>
-                    </div>
-                    <div class="flex-1 flex flex-col">
-                        <div class="p-3 border-b text-sm">
-                            Conversation: {{ adminConversationId || 'none selected' }}
-                        </div>
-                        <div class="flex-1 p-3 overflow-y-auto space-y-2">
-                            <div v-for="m in adminMessages" :key="m.ts + m.role + m.content" class="text-sm">
-                                <span class="font-bold">{{ m.role }}:</span> {{ m.content }}
-                            </div>
-                        </div>
-                        <div class="p-3 border-t flex space-x-2">
-                            <button @click="takeoverSelected" class="px-3 py-1 border rounded text-sm">Take over</button>
-                            <input v-model="adminReplyInput" @keyup.enter="sendAdminReply" class="flex-1 h-9 rounded border px-2 outline-none" placeholder="Admin reply">
-                            <button @click="sendAdminReply" class="wx-btn-green px-3 rounded">Send</button>
+                    <div v-if="debugVisible" class="border-t bg-[#FAFAFA] p-2 text-[11px] text-gray-700 max-h-44 overflow-y-auto">
+                        <div class="font-bold mb-1">Trace (latest first)</div>
+                        <div v-for="(e, idx) in traceEvents" :key="idx" class="mb-1 border-b pb-1">
+                            <div><span class="font-medium">{{ e.ts }}</span> · <span class="text-[#576B95]">{{ e.type }}</span></div>
+                            <div class="whitespace-pre-wrap">{{ e.text }}</div>
                         </div>
                     </div>
                 </section>
 
                 <!-- 发现页：只保留朋友圈，彻底删除扫一扫/摇一摇 -->
-                <section v-if="activeTab === 'discover'" class="h-full">
+                <section v-if="activeTab === 'discover'" class="flex-1 min-h-0 overflow-y-auto hide-scrollbar">
                     <div class="mt-3 bg-white">
                         <div @click="currentPage = 'moments'" class="flex items-center justify-between p-4 active:bg-gray-100 cursor-pointer">
                             <div class="flex items-center space-x-4">
@@ -143,7 +131,7 @@
                     </div>
                 </section>
 
-                <section v-if="activeTab === 'me'" class="h-full">
+                <section v-if="activeTab === 'me'" class="flex-1 min-h-0 overflow-y-auto hide-scrollbar">
                     <div class="bg-white p-6 flex items-center space-x-4 mb-3">
                         <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Felix" class="w-16 h-16 rounded-xl bg-gray-100">
                         <div>
@@ -159,11 +147,28 @@
                         <span class="text-gray-400 text-sm" v-if="currentStatus">{{ currentStatus.label }} ></span>
                         <span class="text-gray-400 text-sm" v-else>Not set ></span>
                     </div>
+                    <a :href="'admin.html' + adminPageQuery" class="bg-white p-4 flex justify-between items-center cursor-pointer border-b text-inherit no-underline active:bg-gray-50">
+                        <div class="flex items-center space-x-3">
+                            <i class="ri-shield-user-line text-[#07C160] text-xl"></i>
+                            <div class="leading-tight">
+                                <span class="text-[16px]">管理后台</span>
+                                <div class="text-[10px] text-gray-500 font-normal">Admin — queue &amp; LLM API</div>
+                            </div>
+                        </div>
+                        <i class="ri-arrow-right-s-line text-gray-300 text-xl"></i>
+                    </a>
                 </section>
             </div>
 
             <!-- 朋友圈页面 -->
-            <section v-if="currentPage === 'moments'" class="bg-white min-h-full pb-20">
+            <section v-if="currentPage === 'moments'" class="bg-white flex-1 min-h-0 overflow-y-auto hide-scrollbar pb-20 relative">
+                <button
+                    type="button"
+                    @click="refreshMomentsTranslations"
+                    class="absolute top-3 right-3 z-30 px-2 py-1 rounded border text-[11px] bg-white/90"
+                >
+                    Refresh EN
+                </button>
                 <div class="h-72 bg-gray-400 relative mb-12">
                     <img src="https://picsum.photos/800/600?random=20" class="w-full h-full object-cover">
                     <div class="absolute -bottom-6 right-4 flex items-center space-x-4">
@@ -239,7 +244,7 @@
             </div>
 
             <!-- 状态选择页面 -->
-            <section v-if="currentPage === 'statusSelect'" class="bg-[#87A0B5] h-full flex flex-col text-white">
+            <section v-if="currentPage === 'statusSelect'" class="bg-[#87A0B5] flex-1 min-h-0 flex flex-col overflow-hidden text-white">
                 <div class="h-16 flex items-center justify-between px-4">
                     <i @click="currentPage = 'main'; activeTab = 'me';" class="ri-close-line text-3xl cursor-pointer"></i>
                     <div class="text-center">
@@ -311,7 +316,7 @@
             </section>
 
             <!-- 状态详情 + 发布按钮 -->
-            <section v-if="currentPage === 'statusDetail'" class="status-detail-bg h-full flex flex-col text-white">
+            <section v-if="currentPage === 'statusDetail'" class="status-detail-bg flex-1 min-h-0 flex flex-col overflow-hidden text-white">
                 <div class="h-12 flex items-center justify-between px-4">
                     <i @click="currentPage = 'statusSelect'" class="ri-arrow-left-s-line text-2xl cursor-pointer"></i>
                     <span class="font-bold text-[17px]">Status</span>
@@ -335,7 +340,7 @@
 
         <!-- 主页面底部导航 -->
         <nav v-if="currentPage === 'main'" class="h-16 border-t flex justify-around items-center bg-[#F7F7F7] flex-shrink-0 z-50">
-            <div v-for="tab in tabs" @click="activeTab = tab.id; isCommenting = false; if (tab.id === 'admin') refreshAdminQueue();" :class="['flex flex-col items-center cursor-pointer', activeTab === tab.id ? 'text-[#07C160]' : 'text-gray-600']">
+            <div v-for="tab in tabs" @click="activeTab = tab.id; isCommenting = false;" :class="['flex flex-col items-center cursor-pointer', activeTab === tab.id ? 'text-[#07C160]' : 'text-gray-600']">
                 <i :class="[activeTab === tab.id ? tab.iconActive : tab.icon, 'text-2xl']"></i>
                 <span class="text-[10px]">{{ tab.name }}</span>
             </div>
@@ -346,10 +351,18 @@
             <input v-model="commentInput" autofocus class="flex-1 h-10 rounded border-none px-3 outline-none" placeholder="Comment (Chinese)">
             <button @click="submitComment" class="wx-btn-green px-4 py-1.5 rounded">Send</button>
         </div>
+
+        <div
+            v-if="eventToast.visible"
+            @click="openChatFromToast"
+            class="absolute top-14 left-1/2 -translate-x-1/2 z-[120] bg-black/80 text-white text-xs px-3 py-2 rounded-full cursor-pointer"
+        >
+            {{ eventToast.text }}
+        </div>
     </div>
 
     <script>
-        const { createApp, ref, computed } = Vue;
+        const { createApp, ref, computed, nextTick, watch } = Vue;
 
         createApp({
             setup() {
@@ -361,7 +374,6 @@
                     if (currentPage.value === 'statusDetail') return 'Status';
                     if (activeTab.value === 'chat') return 'Chats';
                     if (activeTab.value === 'discover') return 'Discover';
-                    if (activeTab.value === 'admin') return 'Admin';
                     return 'Me';
                 });
 
@@ -371,20 +383,22 @@
                     if (currentPage.value === 'statusDetail') return 'Preview';
                     if (activeTab.value === 'chat') return 'Thread shows Chinese with English under each bubble';
                     if (activeTab.value === 'discover') return 'Open Moments';
-                    if (activeTab.value === 'admin') return 'Moderator console';
                     return 'Profile';
                 });
 
                 const tabs = [
                     { id: 'chat', name: 'Chats', icon: 'ri-chat-3-line', iconActive: 'ri-chat-3-fill' },
                     { id: 'discover', name: 'Discover', icon: 'ri-compass-3-line', iconActive: 'ri-compass-3-fill' },
-                    { id: 'admin', name: 'Admin', icon: 'ri-shield-user-line', iconActive: 'ri-shield-user-fill' },
                     { id: 'me', name: 'Me', icon: 'ri-user-3-line', iconActive: 'ri-user-3-fill' }
                 ];
 
                 const CHAT_LINE_EN = {
                     '你好，我是心理辅助AI。': 'Hello, I am a mental-health support AI.',
                     '已收到': 'Received.',
+                    '嗨，我是W，你的心理咨询师。': 'Hi, I am W, your psychological counselor.',
+                    '先说好了，不用紧张，不用想着要怎么“表达自己”先。': 'No pressure here. You do not need to figure out how to express yourself first.',
+                    '你就当多了个网友，想说话的时候说，不想说就不说，如果觉得为难的话，也可以不回复。': 'Think of me as an online friend. Talk when you want to, stay quiet when you do not, and if replying feels hard, you can leave it for now.',
+                    '今天怎么样？': 'How was your day today?',
                 };
 
                 const momentContentEn = (zh) => {
@@ -437,7 +451,8 @@
                     });
                 };
                 const handlePublish = () => {
-                    posts.value.unshift({
+                    const eventContent = momentText.value;
+                    const newPost = {
                         avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Felix',
                         username: '蔡同学',
                         content: momentText.value,
@@ -446,10 +461,17 @@
                         time: '刚刚',
                         timeEn: momentTimeEn('刚刚'),
                         comments: []
-                    });
+                    };
+                    posts.value.unshift(newPost);
+                    if (eventContent && /[\u4e00-\u9fff]/.test(eventContent)) {
+                        translateToEnglish(eventContent, newPost).then(() => {
+                            if (newPost.en && String(newPost.en).trim()) newPost.contentEn = newPost.en;
+                        });
+                    }
                     isPublishing.value = false;
                     momentText.value = '';
                     images.value = [];
+                    postUserEventAndAskAi('moments', eventContent);
                 };
 
                 // 评论
@@ -472,34 +494,302 @@
                 };
 
                 // 聊天
-                const chatHistory = ref([{ role: 'ai', content: '你好，我是心理辅助AI。' }]);
+                const defaultIntro = [
+                    { role: 'ai', content: '嗨，我是W，你的心理咨询师。', en: 'Hi, I am W, your psychological counselor.' },
+                    { role: 'ai', content: '先说好了，不用紧张，不用想着要怎么“表达自己”先。', en: 'No pressure here. You do not need to figure out how to express yourself first.' },
+                    { role: 'ai', content: '你就当多了个网友，想说话的时候说，不想说就不说，如果觉得为难的话，也可以不回复。', en: 'Think of me as an online friend. Talk when you want to, stay quiet when you do not, and if replying feels hard, you can leave it for now.' },
+                    { role: 'ai', content: '今天怎么样？', en: 'How was your day today?' },
+                ];
+                const cloneDefaultIntro = () =>
+                    defaultIntro.map((m, i) => ({
+                        role: m.role,
+                        content: m.content,
+                        en: m.en || '',
+                        ts: Date.now() + i,
+                    }));
+                const chatHistory = ref(cloneDefaultIntro());
                 const chatInput = ref('');
                 const apiFromQuery = new URLSearchParams(window.location.search).get('api');
                 const API_BASE = apiFromQuery || localStorage.getItem('fyp_api_base') || 'http://127.0.0.1:8010';
                 localStorage.setItem('fyp_api_base', API_BASE);
+                const adminPageQuery = ref(window.location.search || '');
                 const WS_BASE = API_BASE.replace(/^http/i, 'ws');
                 const userId = ref('user_demo_001');
                 const conversationId = ref('');
                 const userWs = ref(null);
+                const pendingJoinConversationId = ref('');
+                const isStreamingReply = ref(false);
+                const suppressNextWsAi = ref('');
+                const suppressNextWsAiNorm = ref('');
+                const suppressOneWsConversationUpdate = ref(false);
+                const debugVisible = ref(false);
+                const traceEvents = ref([]);
+                const eventToast = ref({ visible: false, text: '' });
+                let toastTimer = null;
+                const normalizeForCompare = (lineText) => {
+                    let s = String(lineText || '');
+                    s = s.replace(/\*\*/g, '');
+                    s = s.replace(/[\*`>#\-•]/g, '');
+                    s = s.replace(/^\d+\.\s+/gm, '');
+                    s = s.replace(/\s+/g, ' ').trim();
+                    return s;
+                };
 
                 const appendMessagesDedup = (targetRef, incomingMessages) => {
                     const existed = new Set(targetRef.value.map(m => `${m.role}|${m.content}|${m.ts || ''}`));
                     for (const m of incomingMessages || []) {
+                        const role = m?.role || '';
+                        const content = String(m?.content || '');
+                        // ignore empty assistant/admin messages from transient backend states
+                        if ((role === 'ai' || role === 'admin') && !content.trim()) continue;
                         const key = `${m.role}|${m.content}|${m.ts || ''}`;
                         if (!existed.has(key)) {
                             targetRef.value.push(m);
+                            if ((m.role === 'user' || m.role === 'ai' || m.role === 'admin') && !m.en && String(m.content || '').trim()) {
+                                translateToEnglish(String(m.content || ''), m);
+                            }
                             existed.add(key);
                         }
                     }
                 };
 
+                const addTrace = (type, text) => {
+                    const ts = new Date().toLocaleTimeString();
+                    traceEvents.value.unshift({ ts, type, text: String(text || '') });
+                    if (traceEvents.value.length > 80) traceEvents.value.length = 80;
+                };
+
+                const showEventToast = (text) => {
+                    eventToast.value = { visible: true, text: String(text || '') };
+                    if (toastTimer) clearTimeout(toastTimer);
+                    toastTimer = setTimeout(() => {
+                        eventToast.value.visible = false;
+                    }, 5000);
+                };
+
+                const chatScrollEl = ref(null);
+                const scrollChatToBottom = () => {
+                    nextTick(() => {
+                        requestAnimationFrame(() => {
+                            requestAnimationFrame(() => {
+                                const el = chatScrollEl.value;
+                                if (!el) return;
+                                el.scrollTop = el.scrollHeight;
+                            });
+                        });
+                    });
+                };
+
+                const openChatFromToast = async () => {
+                    eventToast.value.visible = false;
+                    activeTab.value = 'chat';
+                    currentPage.value = 'main';
+                    await loadLatestConversation();
+                    scrollChatToBottom();
+                };
+
+                const buildRiskHint = (pred, status) => {
+                    const risk = pred?.['风险等级'] || 'unknown';
+                    const action = pred?.action || 'unknown';
+                    const state = pred?.['心理状态'] || 'unknown';
+                    const types = Array.isArray(pred?.['问题类型']) ? pred['问题类型'].join(', ') : 'unknown';
+                    if (status === 'waiting_admin' || action === 'handoff_to_human') {
+                        return `System: risk=${risk}, mental_state=${state}, issue_types=${types}; handed off to human moderator.`;
+                    }
+                    return `System: risk=${risk}, mental_state=${state}, issue_types=${types} (action=${action}).`;
+                };
+
+                const translateToEnglish = async (text, msgObj) => {
+                    try {
+                        const resp = await fetch(`${API_BASE}/chat/translate`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ text }),
+                        });
+                        if (!resp.ok) return;
+                        const data = await resp.json();
+                        if (msgObj && typeof data.en === 'string' && data.en.trim()) {
+                            msgObj.en = data.en.trim();
+                        }
+                    } catch {
+                        // keep graceful fallback in chatMessageEn()
+                    }
+                };
+
+                const refreshMissingTranslations = async () => {
+                    for (const m of chatHistory.value) {
+                        if ((m.role === 'user' || m.role === 'ai' || m.role === 'admin') && (!m.en || !String(m.en).trim()) && m.content && String(m.content).trim()) {
+                            await translateToEnglish(m.content, m);
+                        }
+                    }
+                };
+
+                const refreshMomentsTranslations = async () => {
+                    for (const p of posts.value) {
+                        const zh = String(p.content || '').trim();
+                        if (zh && /[\u4e00-\u9fff]/.test(zh)) {
+                            await translateToEnglish(zh, p);
+                            if (p.en && String(p.en).trim()) p.contentEn = p.en;
+                        }
+                    }
+                };
+
+                const postUserEventAndAskAi = async (eventType, content) => {
+                    const text = String(content || '').trim();
+                    if (!text) return;
+                    try {
+                        const resp = await fetch(`${API_BASE}/chat/user-event`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ user_id: userId.value, event_type: eventType, content: text })
+                        });
+                        if (!resp.ok) throw new Error(await resp.text());
+                        const data = await resp.json();
+                        conversationId.value = data.conversation_id || conversationId.value;
+                        pendingJoinConversationId.value = conversationId.value;
+                        if (userWs.value && conversationId.value && userWs.value.readyState === WebSocket.OPEN) {
+                            userWs.value.send(JSON.stringify({ conversation_id: conversationId.value }));
+                        }
+                        showEventToast(`W 看到了你的${eventType === 'moments' ? '朋友圈' : '状态'}，点我查看回复`);
+                        await loadLatestConversation();
+                    } catch (e) {
+                        addTrace('event.error', `${eventType}: ${String(e)}`);
+                    }
+                };
+
+                const clearChatHistory = async () => {
+                    if (!confirm('清除当前对话的全部消息？将同步删除数据库中的记录，且不可撤销。')) return;
+                    try {
+                        const body = { user_id: userId.value };
+                        if (conversationId.value) body.conversation_id = conversationId.value;
+                        const resp = await fetch(`${API_BASE}/chat/clear`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(body),
+                        });
+                        if (!resp.ok) throw new Error(await resp.text());
+                        addTrace('chat.clear', 'ok');
+                        await loadLatestConversation();
+                    } catch (e) {
+                        addTrace('chat.clear.error', String(e));
+                    }
+                };
+
+                const loadLatestConversation = async () => {
+                    try {
+                        const url = `${API_BASE}/chat/latest/${encodeURIComponent(userId.value)}?_=${Date.now()}`;
+                        const resp = await fetch(url, { cache: 'no-store' });
+                        if (!resp.ok) {
+                            addTrace('chat.latest', `HTTP ${resp.status}`);
+                            return;
+                        }
+                        const data = await resp.json();
+                        if (!data?.found) {
+                            addTrace('chat.latest', 'found=false');
+                            conversationId.value = '';
+                            pendingJoinConversationId.value = '';
+                            chatHistory.value = cloneDefaultIntro();
+                            scrollChatToBottom();
+                            return;
+                        }
+                        if (!Array.isArray(data.messages)) {
+                            addTrace('chat.latest', 'messages not an array');
+                            return;
+                        }
+                        conversationId.value = data.conversation_id || conversationId.value;
+                        pendingJoinConversationId.value = conversationId.value;
+                        if (data.messages.length === 0) {
+                            chatHistory.value = cloneDefaultIntro();
+                        } else {
+                            chatHistory.value = data.messages.map(m => ({
+                                id: m.id != null ? m.id : undefined,
+                                role: m.role,
+                                content: String(m.content || ''),
+                                ts: m.ts || Date.now(),
+                                en: ''
+                            }));
+                        }
+                        await refreshMissingTranslations();
+                        if (userWs.value && conversationId.value && userWs.value.readyState === WebSocket.OPEN) {
+                            try {
+                                userWs.value.send(JSON.stringify({ conversation_id: conversationId.value }));
+                            } catch (e) {
+                                console.warn('ws join send failed:', e);
+                            }
+                        }
+                        scrollChatToBottom();
+                    } catch (e) {
+                        addTrace('chat.latest.error', String(e));
+                    }
+                };
+
+                watch(activeTab, (tab) => {
+                    if (tab === 'chat') scrollChatToBottom();
+                });
+                watch(
+                    chatHistory,
+                    () => scrollChatToBottom(),
+                    { deep: true },
+                );
+
                 const connectUserWs = () => {
                     if (userWs.value) return;
                     userWs.value = new WebSocket(`${WS_BASE}/ws/user/${encodeURIComponent(userId.value)}`);
+                    userWs.value.onopen = () => {
+                        const cid = conversationId.value || pendingJoinConversationId.value;
+                        if (cid) {
+                            try {
+                                userWs.value.send(JSON.stringify({ conversation_id: cid }));
+                            } catch (e) {
+                                console.warn('ws join on open failed:', e);
+                            }
+                        }
+                    };
                     userWs.value.onmessage = (evt) => {
-                        const data = JSON.parse(evt.data || '{}');
-                        if (data.type === 'conversation_update') {
-                            appendMessagesDedup(chatHistory, data.messages || []);
+                        try {
+                            if (isStreamingReply.value) return;
+                            const data = JSON.parse(evt.data || '{}');
+                            if (data.type === 'joined_conversation') {
+                                addTrace('ws.joined', data.conversation_id || '');
+                                return;
+                            }
+                            if (data.type === 'conversation_cleared' || data.type === 'messages_deleted') {
+                                if (data.conversation_id && data.conversation_id === conversationId.value) {
+                                    loadLatestConversation();
+                                }
+                                return;
+                            }
+                            if (data.type !== 'conversation_update') return;
+                            if (suppressOneWsConversationUpdate.value) {
+                                suppressOneWsConversationUpdate.value = false;
+                                addTrace('ws.skip', 'dedupe post-stream broadcast');
+                                return;
+                            }
+                            addTrace('ws.conversation_update', JSON.stringify({ status: data.status, messages: (data.messages || []).length }));
+                            const incoming = data.messages || [];
+                            const lastAi = [...chatHistory.value].reverse().find(m => m.role === 'ai');
+                            const incomingAi = [...incoming].reverse().find(m => m.role === 'ai');
+                            const norm = normalizeForCompare;
+                            if (incomingAi && suppressNextWsAi.value && norm(incomingAi.content) === norm(suppressNextWsAi.value)) {
+                                suppressNextWsAi.value = '';
+                                suppressNextWsAiNorm.value = '';
+                                return;
+                            }
+                            if (incomingAi && suppressNextWsAiNorm.value && norm(incomingAi.content).includes(suppressNextWsAiNorm.value)) {
+                                suppressNextWsAi.value = '';
+                                suppressNextWsAiNorm.value = '';
+                                return;
+                            }
+                            if (lastAi && incomingAi && lastAi.content === incomingAi.content) {
+                                return;
+                            }
+                            if (incomingAi && !String(incomingAi.content || '').trim() && lastAi && String(lastAi.content || '').trim()) {
+                                return;
+                            }
+                            appendMessagesDedup(chatHistory, incoming);
+                            scrollChatToBottom();
+                        } catch (e) {
+                            console.warn('ws onmessage parse failed:', e);
                         }
                     };
                     userWs.value.onclose = () => {
@@ -510,93 +800,215 @@
                 const sendChatMsg = async () => {
                     if(!chatInput.value.trim()) return;
                     const text = chatInput.value;
-                    chatHistory.value.push({ role: 'user', content: text, ts: Date.now() });
+                    const reqPayload = { user_id: userId.value, text, stream: true };
+                    const userMsg = { role: 'user', content: text, ts: Date.now(), en: '' };
+                    chatHistory.value.push(userMsg);
                     chatInput.value = '';
+                    translateToEnglish(text, userMsg);
+                    isStreamingReply.value = true;
+                    addTrace('http.request', JSON.stringify(reqPayload, null, 0));
+
+                    const sanitizeAssistantFinal = (raw) => {
+                        let s = String(raw || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+                        s = s.replace(/```[\s\S]*?```/g, ' ');
+                        s = s.replace(/`([^`]+)`/g, '$1');
+                        s = s.replace(/\*\*([^*]+)\*\*/g, '$1');
+                        s = s.replace(/\*([^*]+)\*/g, '$1');
+                        s = s.replace(/^#{1,6}\s+/gm, '');
+                        const lines = s.split('\n').map((l) => l.trim()).filter(Boolean);
+                        const cleaned = lines
+                            .map((line) => {
+                                line = line.replace(/^(回答你的问题|生成文本|翻译语言|以下是|总结|功能包括|我的能力)[：:\s]+/i, '');
+                                line = line.replace(/^[\-\*•]+\s+/, '');
+                                line = line.replace(/^\d+[.)）、]\s*/, '');
+                                return line;
+                            })
+                            .filter(Boolean);
+                        return cleaned.join(' ').replace(/\s{2,}/g, ' ').trim();
+                    };
+                    const sanitizeStreamingAcc = (acc) =>
+                        String(acc || '')
+                            .replace(/\*\*/g, '')
+                            .replace(/`/g, '')
+                            .replace(/^#{1,6}\s+/gm, '');
+
+                    const splitReplyIntoBubbles = (text) => {
+                        const s = String(text || '').trim();
+                        if (!s) return [];
+                        const parts = [];
+                        let cur = '';
+                        let i = 0;
+                        while (i < s.length) {
+                            if (i + 1 < s.length && s.slice(i, i + 2) === '……') {
+                                cur += '……';
+                                i += 2;
+                                const seg = cur.trim();
+                                if (seg) parts.push(seg);
+                                cur = '';
+                                continue;
+                            }
+                            const ch = s[i++];
+                            cur += ch;
+                            if ('。！？'.includes(ch)) {
+                                const seg = cur.trim();
+                                if (seg) parts.push(seg);
+                                cur = '';
+                            }
+                        }
+                        const tail = cur.trim();
+                        if (tail) parts.push(tail);
+                        return parts.length ? parts : [s];
+                    };
+
+                    let streamAcc = '';
+                    let streamingMsg = null;
+                    let hasPushedAi = false;
+                    const aiToTranslate = [];
+
+                    const applyStreamingBubble = () => {
+                        const display = sanitizeStreamingAcc(streamAcc);
+                        if (!display) return;
+                        if (!streamingMsg) {
+                            streamingMsg = { role: 'ai', content: display, ts: Date.now(), en: '' };
+                            chatHistory.value.push(streamingMsg);
+                            hasPushedAi = true;
+                        } else {
+                            streamingMsg.content = display;
+                        }
+                    };
+                    const finalizeAiBubble = (payload) => {
+                        const rawFromDone = payload && payload.reply != null ? payload.reply : '';
+                        let parts = Array.isArray(payload?.reply_parts)
+                            ? payload.reply_parts.map((x) => String(x || '').trim()).filter(Boolean)
+                            : [];
+                        const raw = String(rawFromDone || '').trim() || streamAcc;
+                        let finalText = sanitizeAssistantFinal(raw);
+                        if (!finalText && raw) finalText = raw.replace(/\s+/g, ' ').trim();
+                        if (!parts.length && finalText) parts = splitReplyIntoBubbles(finalText);
+                        if (!parts.length) return '';
+                        if (parts.length === 1) {
+                            finalText = parts[0];
+                            if (!streamingMsg) {
+                                streamingMsg = { role: 'ai', content: finalText, ts: Date.now(), en: '' };
+                                chatHistory.value.push(streamingMsg);
+                                hasPushedAi = true;
+                            } else {
+                                streamingMsg.content = finalText;
+                            }
+                            aiToTranslate.length = 0;
+                            aiToTranslate.push(streamingMsg);
+                            suppressNextWsAi.value = finalText;
+                            suppressNextWsAiNorm.value = normalizeForCompare(finalText);
+                            streamAcc = '';
+                            return finalText;
+                        }
+                        const idx = streamingMsg ? chatHistory.value.indexOf(streamingMsg) : -1;
+                        if (idx >= 0) chatHistory.value.splice(idx, 1);
+                        streamingMsg = null;
+                        for (const p of parts) {
+                            const m = { role: 'ai', content: p, ts: Date.now(), en: '' };
+                            chatHistory.value.push(m);
+                            aiToTranslate.push(m);
+                        }
+                        hasPushedAi = true;
+                        suppressNextWsAi.value = parts.join('');
+                        suppressNextWsAiNorm.value = normalizeForCompare(parts.join(''));
+                        streamAcc = '';
+                        return parts[parts.length - 1];
+                    };
+                    const pushErrorBubble = (errLine) => {
+                        const c = String(errLine || '').trim();
+                        if (!c) return;
+                        const m = { role: 'ai', content: c, ts: Date.now(), en: '' };
+                        chatHistory.value.push(m);
+                        hasPushedAi = true;
+                        translateToEnglish(c, m);
+                    };
+
                     try {
                         const resp = await fetch(`${API_BASE}/chat/send`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ user_id: userId.value, text })
+                            body: JSON.stringify(reqPayload)
                         });
-                        const data = await resp.json();
-                        conversationId.value = data.conversation_id || conversationId.value;
-                        if (userWs.value && conversationId.value) {
-                            userWs.value.send(JSON.stringify({ conversation_id: conversationId.value }));
+                        if (!resp.ok) {
+                            const errText = await resp.text();
+                            throw new Error(errText || resp.statusText);
                         }
-                        // 兜底：若 WS 还没收到推送，先显示 HTTP 返回回复
-                        appendMessagesDedup(chatHistory, [{ role: 'ai', content: data.reply || '已收到', ts: Date.now() }]);
+                        addTrace('http.response', `status=${resp.status} content-type=${resp.headers.get('content-type') || ''}`);
+                        const reader = resp.body.getReader();
+                        const dec = new TextDecoder();
+                        let carry = '';
+                        let lastDoneStatus = '';
+                        const parseLine = (line) => {
+                            const t = line.trim();
+                            if (!t.startsWith('data:')) return;
+                            let payload;
+                            try {
+                                payload = JSON.parse(t.slice(5).trim());
+                            } catch {
+                                return;
+                            }
+                            if (payload.type === 'meta') {
+                                conversationId.value = payload.conversation_id || conversationId.value;
+                                addTrace('sse.meta', JSON.stringify({ conversation_id: payload.conversation_id, status: payload.status, prediction: payload.prediction }, null, 0));
+                                const risk = payload?.prediction?.['风险等级'];
+                                const s = payload?.status;
+                                if (risk || payload?.prediction?.action) {
+                                    const hint = buildRiskHint(payload?.prediction || {}, s);
+                                    const prev = chatHistory.value[chatHistory.value.length - 1];
+                                    if (!(prev && prev.role === 'system' && prev.content === hint)) {
+                                        chatHistory.value.push({ role: 'system', content: hint, ts: Date.now() });
+                                    }
+                                }
+                                if (userWs.value && conversationId.value && userWs.value.readyState === WebSocket.OPEN) {
+                                    try {
+                                        userWs.value.send(JSON.stringify({ conversation_id: conversationId.value }));
+                                    } catch (e) {
+                                        console.warn('ws send failed:', e);
+                                    }
+                                }
+                            } else if (payload.type === 'chunk' && payload.text) {
+                                streamAcc += payload.text;
+                                applyStreamingBubble();
+                            } else if (payload.type === 'system' && payload.content) {
+                                chatHistory.value.push({ role: 'system', content: String(payload.content), ts: Date.now() });
+                            } else if (payload.type === 'done') {
+                                conversationId.value = payload.conversation_id || conversationId.value;
+                                lastDoneStatus = String(payload.status || '');
+                                addTrace('sse.done', JSON.stringify({ conversation_id: payload.conversation_id, status: payload.status, reply_len: String(payload.reply || '').length, bubbles: Array.isArray(payload.reply_parts) ? payload.reply_parts.length : 0 }, null, 0));
+                                suppressOneWsConversationUpdate.value = true;
+                                finalizeAiBubble(payload);
+                            }
+                        };
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            if (done) break;
+                            carry += dec.decode(value, { stream: true });
+                            const lines = carry.split('\n');
+                            carry = lines.pop() || '';
+                            for (const raw of lines) parseLine(raw);
+                        }
+                        parseLine(carry);
+                        if (!hasPushedAi && lastDoneStatus !== 'waiting_admin' && lastDoneStatus !== 'admin') {
+                            pushErrorBubble('已收到');
+                        }
+                        (async () => {
+                            for (const m of aiToTranslate) {
+                                await translateToEnglish(m.content, m);
+                            }
+                        })();
                     } catch (e) {
-                        chatHistory.value.push({ role: 'ai', content: `后端连接失败: ${String(e)}`, ts: Date.now() });
+                        addTrace('error', String(e));
+                        pushErrorBubble(`后端连接失败: ${String(e)}`);
+                    } finally {
+                        isStreamingReply.value = false;
+                        scrollChatToBottom();
                     }
-                };
-
-                // 管理员接管
-                const adminId = ref('admin_001');
-                const adminQueue = ref([]);
-                const adminConversationId = ref('');
-                const adminMessages = ref([]);
-                const adminReplyInput = ref('');
-                const adminWs = ref(null);
-
-                const connectAdminWs = () => {
-                    if (adminWs.value) return;
-                    adminWs.value = new WebSocket(`${WS_BASE}/ws/admin/${encodeURIComponent(adminId.value)}`);
-                    adminWs.value.onmessage = async (evt) => {
-                        const data = JSON.parse(evt.data || '{}');
-                        if (data.type === 'queue_changed') {
-                            await refreshAdminQueue();
-                        }
-                        if (data.type === 'conversation_update' && data.conversation_id === adminConversationId.value) {
-                            appendMessagesDedup(adminMessages, data.messages || []);
-                        }
-                    };
-                    adminWs.value.onclose = () => {
-                        adminWs.value = null;
-                        setTimeout(connectAdminWs, 1000);
-                    };
-                };
-
-                const refreshAdminQueue = async () => {
-                    const resp = await fetch(`${API_BASE}/admin/queue`);
-                    const data = await resp.json();
-                    adminQueue.value = data.items || [];
-                };
-
-                const selectAdminConversation = async (cid) => {
-                    adminConversationId.value = cid;
-                    const resp = await fetch(`${API_BASE}/admin/conversation/${cid}`);
-                    const data = await resp.json();
-                    adminMessages.value = data.messages || [];
-                    if (adminWs.value) {
-                        adminWs.value.send(JSON.stringify({ action: 'watch_conversation', conversation_id: cid }));
-                    }
-                };
-
-                const takeoverSelected = async () => {
-                    if (!adminConversationId.value) return;
-                    await fetch(`${API_BASE}/admin/takeover`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ conversation_id: adminConversationId.value, admin_id: adminId.value })
-                    });
-                    await selectAdminConversation(adminConversationId.value);
-                    await refreshAdminQueue();
-                };
-
-                const sendAdminReply = async () => {
-                    if (!adminConversationId.value || !adminReplyInput.value.trim()) return;
-                    const text = adminReplyInput.value;
-                    adminReplyInput.value = '';
-                    await fetch(`${API_BASE}/admin/reply`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ conversation_id: adminConversationId.value, admin_id: adminId.value, text })
-                    });
-                    await selectAdminConversation(adminConversationId.value);
                 };
 
                 connectUserWs();
-                connectAdminWs();
+                loadLatestConversation();
 
                 // 状态
                 const currentStatus = ref(null);
@@ -644,8 +1056,13 @@
 
                 const commitStatus = () => {
                     currentStatus.value = selectedStatus.value;
+                    const statusText = selectedStatus.value?.label || '';
                     currentPage.value = 'main';
                     activeTab.value = 'me';
+                    if (currentStatus.value && statusText && /[\u4e00-\u9fff]/.test(statusText)) {
+                        translateToEnglish(statusText, currentStatus.value);
+                    }
+                    postUserEventAndAskAi('status', statusText);
                 };
 
                 const goBack = () => {
@@ -658,13 +1075,14 @@
                 };
 
                 return {
-                    activeTab, currentPage, headerTitle, headerTitleEn, tabs,
+                    activeTab, currentPage, headerTitle, headerTitleEn, tabs, adminPageQuery,
+                    chatScrollEl,
                     chatHistory, chatInput, sendChatMsg, chatMessageEn,
-                    momentContentEn, momentTimeEn, momentCommentEn,
-                    adminQueue, adminConversationId, adminMessages, adminReplyInput,
-                    refreshAdminQueue, selectAdminConversation, takeoverSelected, sendAdminReply,
+                    momentContentEn, momentTimeEn, momentCommentEn, refreshMomentsTranslations,
                     posts, isPublishing, momentText, images, triggerUpload, onFilesSelected, handlePublish,
                     commentMenuIndex, isCommenting, commentInput, toggleCommentMenu, startComment, submitComment,
+                    refreshMissingTranslations, clearChatHistory,
+                    debugVisible, traceEvents, eventToast, openChatFromToast,
                     statusCats, pickStatus, selectedStatus, currentStatus, customStatusText, pickCustomStatus, commitStatus,
                     goBack
                 };

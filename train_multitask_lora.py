@@ -32,15 +32,21 @@ except ImportError as e:
         "\n当前错误：{}".format(e)
     )
 
-from multitask_config import (
-    map_s1,
-    map_s2,
-    map_s3,
-    S1_LABELS,
-    S2_LABELS,
-    S3_LABELS,
-)
+from multitask_config import S1_LABELS, S2_LABELS, S3_LABELS
 from multitask_model import MultiTaskBertForPsychology
+from multitask_data import load_multitask_supervision
+
+# 本地预训练 BERT 基座目录（需含 config.json、vocab.txt、pytorch_model.bin 或 model.safetensors）
+# 可用环境变量覆盖，便于换机器：FYP_BACKBONE_BERT_CHINESE / FYP_BACKBONE_MENTALBERT
+_BACKBONE_ROOT = os.environ.get("FYP_MODELS_ROOT", r"D:\CS_project\FYP\models")
+BACKBONE_BERT_CHINESE = os.environ.get(
+    "FYP_BACKBONE_BERT_CHINESE",
+    os.path.join(_BACKBONE_ROOT, "chinese_L-12_H-768_A-12"),
+)
+BACKBONE_CHINESE_MENTALBERT = os.environ.get(
+    "FYP_BACKBONE_MENTALBERT",
+    os.path.join(_BACKBONE_ROOT, "Chinese-MentalBERT"),
+)
 
 
 def set_seed(seed: int):
@@ -48,6 +54,23 @@ def set_seed(seed: int):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+
+
+def _balanced_class_weights_vector(y: np.ndarray, num_classes: int) -> np.ndarray:
+    """
+    sklearn 的 compute_class_weight 要求 classes 里的每个 id 都在 y 中出现。
+    多任务数据极度不平衡时，训练子集可能缺某一类；只对 y 中出现的类算权重，其余类权重保持 1.0。
+    """
+    y = np.asarray(y, dtype=np.int64)
+    full = np.ones(num_classes, dtype=np.float32)
+    present = np.unique(y)
+    present = present[(present >= 0) & (present < num_classes)]
+    if present.size == 0:
+        return full
+    raw = compute_class_weight(class_weight="balanced", classes=present, y=y).astype(np.float32)
+    for c, wt in zip(present, raw):
+        full[int(c)] = float(wt)
+    return full
 
 
 class MultiTaskWeiboDataset(Dataset):
@@ -240,9 +263,12 @@ def build_dataloaders(
                 stratify=None,
             )
 
+    inds = np.arange(len(texts), dtype=np.int64)
+
     strat1 = labels_s2 if len(set(labels_s2)) > 1 else None
-    x_trainval, x_test, y1_trainval, y1_test, y2_trainval, y2_test, y3_trainval, y3_test = safe_split(
+    x_trainval, x_test, i_trainval, i_test, y1_trainval, y1_test, y2_trainval, y2_test, y3_trainval, y3_test = safe_split(
         texts,
+        inds,
         labels_s1,
         labels_s2,
         labels_s3,
@@ -251,8 +277,9 @@ def build_dataloaders(
     )
 
     strat2 = y2_trainval if len(set(y2_trainval)) > 1 else None
-    x_train, x_val, y1_train, y1_val, y2_train, y2_val, y3_train, y3_val = safe_split(
+    x_train, x_val, i_train, i_val, y1_train, y1_val, y2_train, y2_val, y3_train, y3_val = safe_split(
         x_trainval,
+        i_trainval,
         y1_trainval,
         y2_trainval,
         y3_trainval,
@@ -283,6 +310,9 @@ def build_dataloaders(
         "y1_train": y1_train,
         "y2_train": y2_train,
         "y3_train": y3_train,
+        "idx_train": i_train.tolist(),
+        "idx_val": i_val.tolist(),
+        "idx_test": i_test.tolist(),
     }
     return train_loader, val_loader, test_loader, stats
 
@@ -304,7 +334,8 @@ def main():
     parser.add_argument(
         "--model_name",
         type=str,
-        default=r"D:\CS_project\FYP\chinese_L-12_H-768_A-12",
+        default=BACKBONE_BERT_CHINESE,
+        help=f"预训练 BERT 目录。默认中文 BERT：{BACKBONE_BERT_CHINESE}；MentalBERT：{BACKBONE_CHINESE_MENTALBERT}",
     )
     parser.add_argument("--max_length", type=int, default=128)
     parser.add_argument("--batch_size", type=int, default=8)
@@ -327,6 +358,11 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max_samples", type=int, default=0, help="0表示不限制样本数")
     parser.add_argument("--device", type=str, default="auto")
+    parser.add_argument(
+        "--save_split_indices",
+        action="store_true",
+        help="将 train/val/test 在原 CSV 中的行索引写入 output_dir/split_indices.npz（大表会占磁盘）",
+    )
     parser.set_defaults(use_s1_pos_weight=True, use_s2_class_weight=True, use_s3_class_weight=True)
     args = parser.parse_args()
 
@@ -343,13 +379,8 @@ def main():
     if args.max_samples and args.max_samples > 0:
         df = df.sample(n=args.max_samples, random_state=args.seed).reset_index(drop=True)
 
-    # 自动打标三任务
-    texts = df["text"].astype(str).tolist()
-    weibo_labels = df["label"].tolist()
-
-    labels_s1 = [map_s1(t) for t in texts]
-    labels_s2 = [map_s2(int(x)) for x in weibo_labels]
-    labels_s3 = [map_s3(t) for t in texts]
+    texts, labels_s1, labels_s2, labels_s3, csv_format = load_multitask_supervision(df)
+    print(f"[data] format={csv_format} n={len(texts)} path={args.weibo_csv_path}")
 
     s1_mat = np.asarray(labels_s1, dtype=np.float32)
     n_pos = int((s1_mat.sum(axis=1) > 0).sum())
@@ -365,9 +396,11 @@ def main():
     # - TensorFlow ckpt: 目录下存在 bert_model.ckpt.index（先自动转换为 PyTorch 再加载，避免 transformers 将 ckpt 前缀当 repo id）
     model_dir = args.model_name
     pt_bin = os.path.join(model_dir, "pytorch_model.bin")
+    st_bin = os.path.join(model_dir, "model.safetensors")
+    has_hf_weights = os.path.isfile(pt_bin) or os.path.isfile(st_bin)
     tf_index = os.path.join(model_dir, "bert_model.ckpt.index")
 
-    if os.path.isfile(tf_index) and (not os.path.isfile(pt_bin)):
+    if os.path.isfile(tf_index) and (not has_hf_weights):
         converted_dir = os.path.join(args.output_dir, "converted_bert_pytorch")
         os.makedirs(converted_dir, exist_ok=True)
         converted_pt_bin = os.path.join(converted_dir, "pytorch_model.bin")
@@ -409,7 +442,12 @@ def main():
         # 转换成功后，训练/加载都指向 PyTorch 目录
         model_dir = converted_dir
 
-    # tokenizer：优先从最终 model_dir 加载（转 PyTorch 时会复制 vocab.txt）
+    # TF 转换后 model_dir 已变，需重新判断权重文件
+    has_hf_weights = os.path.isfile(os.path.join(model_dir, "pytorch_model.bin")) or os.path.isfile(
+        os.path.join(model_dir, "model.safetensors")
+    )
+
+    # tokenizer：优先从最终 model_dir 加载（转 PyTorch 时会复制 vocab 相关文件）
     tokenizer = BertTokenizer.from_pretrained(
         model_dir,
         local_files_only=True,
@@ -427,6 +465,18 @@ def main():
         test_ratio=args.test_ratio,
         seed=args.seed,
     )
+    if args.save_split_indices:
+        np.savez_compressed(
+            os.path.join(args.output_dir, "split_indices.npz"),
+            train=np.asarray(split_stats["idx_train"], dtype=np.int64),
+            val=np.asarray(split_stats["idx_val"], dtype=np.int64),
+            test=np.asarray(split_stats["idx_test"], dtype=np.int64),
+        )
+        print(f"[split] saved {os.path.join(args.output_dir, 'split_indices.npz')}")
+
+    train_log_path = os.path.join(args.output_dir, "training_log.jsonl")
+    if os.path.isfile(train_log_path):
+        os.remove(train_log_path)
 
     # 可选：WeightedRandomSampler（让 batch 更容易包含 S1 正例，避免“全空预测最安全”）
     if args.use_weighted_sampler:
@@ -447,7 +497,8 @@ def main():
 
     resolved_backbone_dir = model_dir
 
-    if os.path.isfile(os.path.join(model_dir, "pytorch_model.bin")):
+    if has_hf_weights:
+        # transformers 会识别 pytorch_model.bin 或 model.safetensors；三任务头在 checkpoint 中不存在时会自动初始化
         model = MultiTaskBertForPsychology.from_pretrained(
             model_dir,
             local_files_only=True,
@@ -458,7 +509,7 @@ def main():
     else:
         raise FileNotFoundError(
             "无法从本地加载模型。请确认：\n"
-            "- 目录存在 pytorch_model.bin（建议使用已转换的 PyTorch 目录）\n"
+            "- 目录存在 pytorch_model.bin 或 model.safetensors（HuggingFace 快照）\n"
             f"当前 model_dir={model_dir}"
         )
 
@@ -520,19 +571,23 @@ def main():
 
     if args.use_s2_class_weight:
         y2_train = np.asarray(split_stats["y2_train"], dtype=np.int64)
-        classes = np.arange(len(S2_LABELS))
-        weights = compute_class_weight(class_weight="balanced", classes=classes, y=y2_train).astype(np.float32)
+        weights = _balanced_class_weights_vector(y2_train, len(S2_LABELS))
         w = torch.tensor(weights, device=device)
         counts = np.bincount(y2_train, minlength=len(S2_LABELS)).astype(np.int64)
+        missing = [i for i in range(len(S2_LABELS)) if counts[i] == 0]
+        if missing:
+            print(f"[S2 class_weight] 训练子集中未出现的类别（权重保持1.0）: {missing}")
         print(f"[S2 class_weight] counts={counts.tolist()} weights={weights.tolist()}")
         ce_s2_kwargs["weight"] = w
 
     if args.use_s3_class_weight:
         y3_train = np.asarray(split_stats["y3_train"], dtype=np.int64)
-        classes = np.arange(len(S3_LABELS))
-        weights = compute_class_weight(class_weight="balanced", classes=classes, y=y3_train).astype(np.float32)
+        weights = _balanced_class_weights_vector(y3_train, len(S3_LABELS))
         w = torch.tensor(weights, device=device)
         counts = np.bincount(y3_train, minlength=len(S3_LABELS)).astype(np.int64)
+        missing = [i for i in range(len(S3_LABELS)) if counts[i] == 0]
+        if missing:
+            print(f"[S3 class_weight] 训练子集中未出现的类别（权重保持1.0）: {missing}")
         print(f"[S3 class_weight] counts={counts.tolist()} weights={weights.tolist()}")
         ce_s3_kwargs["weight"] = w
 
@@ -592,6 +647,14 @@ def main():
             + 0.5 * val_metrics["s1_recall_micro"]
         )
         print(f"[Val] epoch={epoch+1} metrics={val_metrics}")
+        with open(train_log_path, "a", encoding="utf-8") as tlf:
+            tlf.write(
+                json.dumps(
+                    {"epoch": epoch + 1, "val_metrics": val_metrics, "composite": composite},
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
 
         if composite > best_metric:
             best_metric = composite
@@ -625,6 +688,13 @@ def main():
 
     merged_model.to(device)
 
+    val_metrics_final = evaluate(
+        merged_model,
+        val_loader,
+        device,
+        s1_threshold=args.s1_threshold,
+        debug_samples=args.debug_eval_samples,
+    )
     test_metrics = evaluate(
         merged_model,
         test_loader,
@@ -632,7 +702,30 @@ def main():
         s1_threshold=args.s1_threshold,
         debug_samples=args.debug_eval_samples,
     )
+    print(f"[Val/merged] metrics={val_metrics_final}")
     print(f"[Test] metrics={test_metrics}")
+
+    report = {
+        "data_format": csv_format,
+        "csv_path": os.path.abspath(args.weibo_csv_path),
+        "backbone": os.path.abspath(args.model_name),
+        "output_dir": os.path.abspath(args.output_dir),
+        "seed": args.seed,
+        "val_ratio": args.val_ratio,
+        "test_ratio": args.test_ratio,
+        "n_samples": len(texts),
+        "n_train": len(split_stats["idx_train"]),
+        "n_val": len(split_stats["idx_val"]),
+        "n_test": len(split_stats["idx_test"]),
+        "best_val_composite_during_train": best_metric,
+        "metrics_val_merged_best_ckpt": val_metrics_final,
+        "metrics_test_merged_best_ckpt": test_metrics,
+        "s1_threshold": args.s1_threshold,
+    }
+    report_path = os.path.join(args.output_dir, "metrics_report.json")
+    with open(report_path, "w", encoding="utf-8") as rf:
+        json.dump(report, rf, ensure_ascii=False, indent=2)
+    print(f"[report] saved {report_path}")
 
 
 if __name__ == "__main__":
