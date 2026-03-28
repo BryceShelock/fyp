@@ -1,15 +1,14 @@
-# Final Year Project — Multi-Task Psychological Modeling & Risk Demo
+# A WeChat Plugin Prototype for Fine-Grained User Psychological Risk Detection and Lightweight Response
 
-End-to-end pipeline for **weakly supervised** multi-task learning on Chinese text: **S1** (problem types, multi-label), **S2** (mental state, single-label), **S3** (risk, single-label), built on **Chinese BERT + LoRA**, plus a small **FastAPI** service, **SQLite** persistence, **WebSocket** updates, and prototype UIs (**`wechat_mock.html`**, **Gradio**).
+**FYP / coursework repository** — a **WeChat-style plugin prototype**: **fine-grained** multi-task signals (**S1** problem types, **S2** mental state, **S3** risk) drive **policy** (e.g. AI reply vs. human handoff), while **lightweight response** is provided by a configurable **external LLM** (OpenAI-compatible API) in the chat flow. Core detection uses **Chinese BERT + optional LoRA**; the stack includes **FastAPI**, **SQLite**, **WebSocket**, and prototype UIs (**`wechat_mock.html`**, **`admin.html`**, **Gradio**).
 
 ## Features
 
-- **Model**: `MultiTaskBertForPsychology` — shared BERT encoder + three heads; training with **LoRA** (`peft`).
-- **Training**: `train_multitask_lora.py` — stratified split, metrics, optional **S1 `pos_weight`**, **S2/S3 class weights**, task loss weights, **S1 threshold** (default `0.15`).
-- **Inference**: `multitask_predict.py` — structured JSON (may include Chinese display keys from `multitask_config`).
-- **Risk & policy**: `risk_scoring.py`, `policy_engine.py` — `action` such as `ai_reply` / `handoff_to_human`.
-- **Backend**: `backend_api.py` — REST + WebSocket, `chat_app.db` (`conversations`, `messages`, `inference_logs`), `/monitor/latest` for Gradio monitor tab.
-- **UI**: `wechat_mock.html` (chat + Moments); `admin.html` (queue takeover + LLM API settings stored in SQLite); `gradio.py` → `app_gradio.py` (local predict + backend log monitor).
+- **Detection model**: `MultiTaskBertForPsychology` — shared BERT encoder + three heads; training with **LoRA** (`peft`) via `train_multitask_lora.py` (stratified split, metrics, optional **S1 `pos_weight`**, **S2/S3 class weights**, task loss weights, **S1 threshold** default `0.15`).
+- **Inference**: `multitask_predict.py` — structured JSON (Chinese display keys from `multitask_config`); **risk** may combine model **S3** probabilities with `risk_scoring.py`; **action** from `policy_engine.py` (e.g. `ai_reply` / `handoff_to_human`).
+- **Lightweight response**: `backend_api.py` + `chat_llm.py` — streaming or non-streaming HTTP to upstream LLM; Admin UI stores **LLM base URL, model, sampling, streaming options** in SQLite (`/admin/llm-config`).
+- **Persistence & realtime**: `chat_app.db` — `conversations`, `messages`, `inference_logs`; WebSocket updates for user/admin clients.
+- **UI**: `wechat_mock.html` (chat + Moments); `admin.html` (queue, takeover, LLM settings); `gradio.py` → `app_gradio.py` (local predict + backend log monitor).
 
 ## Repository layout (main files)
 
@@ -19,14 +18,16 @@ End-to-end pipeline for **weakly supervised** multi-task learning on Chinese tex
 | `multitask_model.py` | Multi-head BERT model |
 | `train_multitask_lora.py` | LoRA training |
 | `multitask_predict.py` | CLI / library inference |
+| `risk_scoring.py`, `policy_engine.py` | Risk score & routing action |
+| `chat_llm.py` | Upstream LLM HTTP client (stream / non-stream) |
 | `eval_only.py` | Standalone eval on CSV split |
 | `merge_peft_to_best_model.py` | Merge adapter + base if training ends after saving checkpoints |
 | `backend_api.py` | FastAPI app |
 | `wechat_mock.html` | User chat + Moments demo client |
-| `admin.html` | Admin queue + configurable reply LLM (`/admin/llm-config`) |
+| `admin.html` | Admin queue + LLM API settings |
 | `app_gradio.py` | Gradio UI |
 | `gradio.py` | Thin launcher (avoids shadowing the `gradio` package) |
-| `后端多任务模型说明文档.md` | Design notes (English body in repo version) |
+| `后端多任务模型说明文档.md` | Backend multitask model design (detailed) |
 
 ## Environment
 
@@ -104,6 +105,8 @@ Open `wechat_mock.html` in a browser. If the backend is not on `8010`, use:
 
 `wechat_mock.html?api=http://127.0.0.1:<PORT>`
 
+**Admin** (queue + LLM config): open `admin.html` with the same `?api=` base if needed.
+
 ## Gradio
 
 ```bash
@@ -127,4 +130,4 @@ See [LICENSE](LICENSE) in the repository root (MIT if present).
 
 ## Citation / coursework
 
-If this README is used for a thesis or report, cite your own institution’s rules; the technical design is summarized in `后端多任务模型说明文档.md`.
+Use your institution’s thesis/report rules. **English project title:** *A WeChat Plugin Prototype for Fine-Grained User Psychological Risk Detection and Lightweight Response*. Technical design of the **detection** branch is summarized in `后端多任务模型说明文档.md`.
