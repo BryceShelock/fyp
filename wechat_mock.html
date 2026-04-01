@@ -60,7 +60,7 @@
                 <i v-if="currentPage === 'moments'" @click="currentPage = 'main'; activeTab = 'discover'; isCommenting = false;" class="ri-arrow-left-s-line text-2xl cursor-pointer"></i>
                 <i v-else-if="currentPage !== 'main'" @click="goBack(); isCommenting = false;" class="ri-arrow-left-s-line text-2xl cursor-pointer"></i>
                 <div class="flex flex-col leading-tight">
-                    <span class="font-bold text-[17px]">{{ headerTitle }}</span>
+                <span class="font-bold text-[17px]">{{ headerTitle }}</span>
                     <span v-if="headerTitleEn" class="text-[10px] text-gray-500 font-normal">{{ headerTitleEn }}</span>
                 </div>
             </div>
@@ -70,7 +70,12 @@
             <div v-else-if="currentPage === 'main' && activeTab === 'chat'">
                 <div class="flex items-center gap-2">
                     <button @click="debugVisible = !debugVisible" class="px-2 py-1 rounded border text-xs whitespace-nowrap">{{ debugVisible ? 'Hide Trace' : 'Show Trace' }}</button>
-                    <button @click="refreshMissingTranslations" class="px-2 py-1 rounded border text-xs whitespace-nowrap">Refresh EN</button>
+                    <button
+                        type="button"
+                        @click="refreshMissingTranslations"
+                        :disabled="translateEnBusy"
+                        class="px-2 py-1 rounded border text-xs whitespace-nowrap transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >{{ translateEnBusy ? 'Refreshing…' : 'Refresh EN' }}</button>
                     <button @click="clearChatHistory" class="px-2 py-1 rounded border text-xs whitespace-nowrap text-red-700 border-red-200">Clear chat</button>
                 </div>
             </div>
@@ -466,7 +471,7 @@
                     if (eventContent && /[\u4e00-\u9fff]/.test(eventContent)) {
                         translateToEnglish(eventContent, newPost).then(() => {
                             if (newPost.en && String(newPost.en).trim()) newPost.contentEn = newPost.en;
-                        });
+                    });
                     }
                     isPublishing.value = false;
                     momentText.value = '';
@@ -542,6 +547,12 @@
                         const content = String(m?.content || '');
                         // ignore empty assistant/admin messages from transient backend states
                         if ((role === 'ai' || role === 'admin') && !content.trim()) continue;
+                        if (role === 'system' && content.trim()) {
+                            const dupSys = targetRef.value.some(
+                                (x) => x.role === 'system' && String(x.content || '') === content,
+                            );
+                            if (dupSys) continue;
+                        }
                         const key = `${m.role}|${m.content}|${m.ts || ''}`;
                         if (!existed.has(key)) {
                             targetRef.value.push(m);
@@ -594,33 +605,68 @@
                     const state = pred?.['心理状态'] || 'unknown';
                     const types = Array.isArray(pred?.['问题类型']) ? pred['问题类型'].join(', ') : 'unknown';
                     if (status === 'waiting_admin' || action === 'handoff_to_human') {
-                        return `System: risk=${risk}, mental_state=${state}, issue_types=${types}; handed off to human moderator.`;
+                        return `System: Risk level: ${risk}. Mental state (model): ${state}. Issue types: ${types}. This chat was handed off to a human moderator.`;
                     }
-                    return `System: risk=${risk}, mental_state=${state}, issue_types=${types} (action=${action}).`;
+                    return `System: Risk level: ${risk}. Mental state (model): ${state}. Issue types: ${types}. Action: ${action}.`;
                 };
 
+                const translateEnBusy = ref(false);
+
                 const translateToEnglish = async (text, msgObj) => {
+                    const raw = String(text || '').trim();
+                    if (!raw) return false;
                     try {
                         const resp = await fetch(`${API_BASE}/chat/translate`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ text }),
+                            body: JSON.stringify({ text: raw }),
                         });
-                        if (!resp.ok) return;
-                        const data = await resp.json();
-                        if (msgObj && typeof data.en === 'string' && data.en.trim()) {
-                            msgObj.en = data.en.trim();
+                        if (!resp.ok) {
+                            const errBody = await resp.text().catch(() => '');
+                            addTrace('translate.http', `HTTP ${resp.status} ${errBody}`);
+                            return false;
                         }
-                    } catch {
-                        // keep graceful fallback in chatMessageEn()
+                        const data = await resp.json().catch(() => ({}));
+                        const en = typeof data.en === 'string' ? data.en.trim() : '';
+                        if (msgObj && en) {
+                            msgObj.en = en;
+                            if (en.startsWith('[Translation unavailable')) {
+                                addTrace('translate.fallback', 'LLM off or not configured');
+                            }
+                            return true;
+                        }
+                        addTrace('translate.empty', 'no en in response');
+                        return false;
+                    } catch (e) {
+                        addTrace('translate.error', String(e));
+                        return false;
                     }
                 };
 
                 const refreshMissingTranslations = async () => {
-                    for (const m of chatHistory.value) {
-                        if ((m.role === 'user' || m.role === 'ai' || m.role === 'admin') && (!m.en || !String(m.en).trim()) && m.content && String(m.content).trim()) {
-                            await translateToEnglish(m.content, m);
+                    if (translateEnBusy.value) return;
+                    translateEnBusy.value = true;
+                    let ok = 0;
+                    let fail = 0;
+                    try {
+                        for (const m of chatHistory.value) {
+                            if ((m.role === 'user' || m.role === 'ai' || m.role === 'admin') && (!m.en || !String(m.en).trim()) && m.content && String(m.content).trim()) {
+                                const r = await translateToEnglish(m.content, m);
+                                if (r) ok += 1;
+                                else fail += 1;
+                            }
                         }
+                        let msg;
+                        if (ok === 0 && fail === 0) {
+                            msg = 'Refresh EN: nothing to do (every line already has English, or chat is empty).';
+                        } else if (fail) {
+                            msg = `Refresh EN: ${ok} updated, ${fail} failed — enable LLM in Admin and check Trace.`;
+                        } else {
+                            msg = `Refresh EN: ${ok} message(s) updated.`;
+                        }
+                        showEventToast(msg);
+                    } finally {
+                        translateEnBusy.value = false;
                     }
                 };
 
@@ -751,6 +797,23 @@
                             const data = JSON.parse(evt.data || '{}');
                             if (data.type === 'joined_conversation') {
                                 addTrace('ws.joined', data.conversation_id || '');
+                                return;
+                            }
+                            if (data.type === 'conversation_status') {
+                                if (data.conversation_id === conversationId.value && data.status === 'ai') {
+                                    const line =
+                                        'System: The moderator has released this chat. W (AI) is handling messages again.';
+                                    const dup = chatHistory.value.some(
+                                        (m) =>
+                                            m.role === 'system' &&
+                                            String(m.content || '').includes('W (AI) is handling messages again'),
+                                    );
+                                    if (!dup) {
+                                        chatHistory.value.push({ role: 'system', content: line, ts: Date.now() });
+                                        scrollChatToBottom();
+                                        addTrace('ws.status', 'released to AI');
+                                    }
+                                }
                                 return;
                             }
                             if (data.type === 'conversation_cleared' || data.type === 'messages_deleted') {
@@ -1081,7 +1144,7 @@
                     momentContentEn, momentTimeEn, momentCommentEn, refreshMomentsTranslations,
                     posts, isPublishing, momentText, images, triggerUpload, onFilesSelected, handlePublish,
                     commentMenuIndex, isCommenting, commentInput, toggleCommentMenu, startComment, submitComment,
-                    refreshMissingTranslations, clearChatHistory,
+                    translateEnBusy, refreshMissingTranslations, clearChatHistory,
                     debugVisible, traceEvents, eventToast, openChatFromToast,
                     statusCats, pickStatus, selectedStatus, currentStatus, customStatusText, pickCustomStatus, commitStatus,
                     goBack

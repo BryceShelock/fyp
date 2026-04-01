@@ -8,7 +8,7 @@ from multitask_config import S1_LABELS, S2_LABELS, S3_LABELS
 class MultiTaskBertForPsychology(BertPreTrainedModel):
     """
     一个 BERT + 三个任务头：
-      - S1: multi-label -> BCEWithLogitsLoss
+      - S1: single-label (EFA 19 类) -> CrossEntropyLoss
       - S2: single-label -> CrossEntropyLoss
       - S3: single-label -> CrossEntropyLoss
     维度默认与 multitask_config 中标签列表一致；from_pretrained 时若 config.json
@@ -58,7 +58,7 @@ class MultiTaskBertForPsychology(BertPreTrainedModel):
         self,
         input_ids=None,
         attention_mask=None,
-        labels_s1=None,  # shape: [bs, 8] multi-hot
+        labels_s1=None,  # shape: [bs] class id
         labels_s2=None,  # shape: [bs] int
         labels_s3=None,  # shape: [bs] int
         **kwargs,
@@ -75,12 +75,8 @@ class MultiTaskBertForPsychology(BertPreTrainedModel):
 
         loss = None
         if labels_s1 is not None and labels_s2 is not None and labels_s3 is not None:
-            # S1多标签
-            bce = nn.BCEWithLogitsLoss()
-            loss_s1 = bce(s1_logits, labels_s1.float())
-
-            # S2、S3单标签
             ce = nn.CrossEntropyLoss()
+            loss_s1 = ce(s1_logits, labels_s1.long())
             loss_s2 = ce(s2_logits, labels_s2.long())
             loss_s3 = ce(s3_logits, labels_s3.long())
 

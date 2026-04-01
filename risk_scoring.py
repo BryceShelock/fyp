@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import math
 
 from multitask_config import S3_LABELS
+
+# 将 S3 分布与均匀分布混合：p'=(1-ε)p+ε/6，缓解错误过置信导致的 model_base 顶满（默认 0 不改变行为）。
+_DEFAULT_RISK_UNIFORM_BLEND = float(os.environ.get("MULTITASK_RISK_UNIFORM_BLEND", "0"))
+# 在 uniform blend 之后，对「无紧急」概率放大阻尼系数，略抑误报（默认 0.10 与旧逻辑一致；可提到 0.15~0.25）。
+_NONE_DAMP_SCALE = float(os.environ.get("MULTITASK_RISK_NONE_DAMP_SCALE", "0.10"))
+
+# 连续 risk_score → 低/中/高档位；`multitask_predict` 里 S3 强制转人工的默认置信度与此对齐，避免两套阈值混用。
+RISK_LEVEL_HIGH_THRESHOLD = 0.60
+RISK_LEVEL_MID_THRESHOLD = 0.30
 
 
 @dataclass
@@ -41,21 +51,32 @@ def compute_risk_score(
     def hit(keys: List[str]) -> bool:
         return any(k in raw for k in keys) or any(k in compact for k in keys)
 
-    # 1) base：由 S3 概率（softmax）计算
-    p_action = float(s3_probs.get("suicide_action", 0.0))
-    p_idea = float(s3_probs.get("suicide_ideation", 0.0))
-    p_self = float(s3_probs.get("self_harm", 0.0))
-    p_others = float(s3_probs.get("harm_others", 0.0))
-    p_none = float(s3_probs.get("none", 0.0))
+    # 1) base：由 S3 概率（softmax）计算（EFA 六类）；可选与均匀分布混合，降低 OOD 上过尖分布对加权和的冲击
+    keys = S3_LABELS
+    p = {k: float(s3_probs.get(k, 0.0)) for k in keys}
+    blend_eps = min(max(_DEFAULT_RISK_UNIFORM_BLEND, 0.0), 0.95)
+    if blend_eps > 0:
+        inv = 1.0 / len(keys)
+        p = {k: (1.0 - blend_eps) * p[k] + blend_eps * inv for k in keys}
+
+    p_action = p.get(keys[0], 0.0)
+    p_idea = p.get(keys[1], 0.0)
+    p_self = p.get(keys[2], 0.0)
+    p_harm_on = p.get(keys[3], 0.0)
+    p_harm_plan = p.get(keys[4], 0.0)
+    p_none = p.get(keys[5], 0.0)
 
     base = (
         1.00 * p_action
-        + 0.70 * p_idea
-        + 0.90 * p_self
-        + 0.90 * p_others
+        + 0.72 * p_idea
+        + 0.88 * p_self
+        + 0.95 * p_harm_on
+        + 0.85 * p_harm_plan
     )
 
     reasons: List[str] = []
+    if blend_eps > 0:
+        reasons.append(f"s3_uniform_blend={blend_eps:.3f}")
     reasons.append(f"model_base={base:.3f}")
 
     # 2) rule boosts：明确表达优先（可在论文中解释为“安全优先的规则兜底”）
@@ -81,8 +102,8 @@ def compute_risk_score(
         boost = max(boost, 0.10)
         reasons.append("rule:hopelessness_phrase")
 
-    # none 概率很高时，略微下调（防止 base 太敏感）
-    damp = 0.10 * p_none
+    # none 概率较高时，下调综合分（尺度可由 MULTITASK_RISK_NONE_DAMP_SCALE 调整）
+    damp = max(0.0, _NONE_DAMP_SCALE) * p_none
     if damp > 0:
         reasons.append(f"none_damp={damp:.3f}")
 
@@ -109,9 +130,9 @@ def compute_risk_score(
         score = score_now
 
     # 4) level：映射为低/中/高
-    if score >= 0.60:
+    if score >= RISK_LEVEL_HIGH_THRESHOLD:
         level = "高风险"
-    elif score >= 0.30:
+    elif score >= RISK_LEVEL_MID_THRESHOLD:
         level = "中风险"
     else:
         level = "低风险"

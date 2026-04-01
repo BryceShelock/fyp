@@ -2,12 +2,14 @@ import os
 import json
 import random
 from dataclasses import dataclass
+from typing import Optional
 import shutil
 
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data import WeightedRandomSampler
 from tqdm import tqdm
@@ -18,6 +20,7 @@ from sklearn.metrics import (
     precision_score,
     recall_score,
     confusion_matrix,
+    f1_score,
 )
 
 from transformers import BertTokenizer, BertConfig
@@ -73,6 +76,24 @@ def _balanced_class_weights_vector(y: np.ndarray, num_classes: int) -> np.ndarra
     return full
 
 
+def _s3_focal_loss(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    gamma: float,
+    class_weight: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """多类 Focal：loss ∝ -(1-p_t)^γ log p_t，易分类样本 p_t→1 时梯度变小，缓解过置信。"""
+    logp = F.log_softmax(logits, dim=-1)
+    p = logp.exp()
+    t = target.long().unsqueeze(1)
+    logpt = logp.gather(1, t).squeeze(1)
+    pt = p.gather(1, t).squeeze(1)
+    focal = -((1.0 - pt).clamp(min=1e-8) ** gamma) * logpt
+    if class_weight is not None:
+        focal = focal * class_weight[target.long()]
+    return focal.mean()
+
+
 class MultiTaskWeiboDataset(Dataset):
     def __init__(self, texts, encodings, labels_s1, labels_s2, labels_s3):
         self.texts = texts
@@ -87,7 +108,7 @@ class MultiTaskWeiboDataset(Dataset):
     def __getitem__(self, idx):
         item = {k: torch.tensor(v[idx]) for k, v in self.encodings.items()}
         item["text"] = self.texts[idx]
-        item["labels_s1"] = torch.tensor(self.labels_s1[idx], dtype=torch.float32)
+        item["labels_s1"] = torch.tensor(self.labels_s1[idx], dtype=torch.long)
         item["labels_s2"] = torch.tensor(self.labels_s2[idx], dtype=torch.long)
         item["labels_s3"] = torch.tensor(self.labels_s3[idx], dtype=torch.long)
         return item
@@ -134,8 +155,7 @@ def evaluate(
         s2_logits = out["s2_logits"]
         s3_logits = out["s3_logits"]
 
-        s1_probs = torch.sigmoid(s1_logits).cpu().numpy()
-        pred1 = (s1_probs >= s1_threshold).astype(int)
+        pred1 = torch.argmax(s1_logits, dim=-1).cpu().numpy()
         pred2 = torch.argmax(s2_logits, dim=-1).cpu().numpy()
         pred3 = torch.argmax(s3_logits, dim=-1).cpu().numpy()
 
@@ -150,7 +170,8 @@ def evaluate(
             dbg_p1.extend(list(pred1[:take]))
             dbg_p2.extend(list(pred2[:take]))
             dbg_p3.extend(list(pred3[:take]))
-            dbg_prob1.extend(list(s1_probs[:take]))
+            s1_top = torch.softmax(s1_logits, dim=-1).cpu().numpy()
+            dbg_prob1.extend(list(s1_top[:take]))
 
         all_y1.append(y1)
         all_y2.append(y2)
@@ -168,12 +189,10 @@ def evaluate(
     y2_pred = np.concatenate(all_pred2, axis=0)
     y3_pred = np.concatenate(all_pred3, axis=0)
 
-    # S1 multi-label
-    s1_precision_micro = precision_score(y1_true, y1_pred, average="micro", zero_division=0)
-    s1_recall_micro = recall_score(y1_true, y1_pred, average="micro", zero_division=0)
+    # S1 single-label (multiclass)
+    s1_acc = accuracy_score(y1_true, y1_pred)
     s1_precision_macro = precision_score(y1_true, y1_pred, average="macro", zero_division=0)
     s1_recall_macro = recall_score(y1_true, y1_pred, average="macro", zero_division=0)
-    s1_subset_acc = accuracy_score(y1_true, y1_pred)
 
     # S2 single-label
     s2_acc = accuracy_score(y2_true, y2_pred)
@@ -185,29 +204,34 @@ def evaluate(
     s3_precision_macro = precision_score(y3_true, y3_pred, average="macro", zero_division=0)
     s3_recall_macro = recall_score(y3_true, y3_pred, average="macro", zero_division=0)
 
+    s1_f1_macro = f1_score(y1_true, y1_pred, average="macro", zero_division=0)
+    s2_f1_macro = f1_score(y2_true, y2_pred, average="macro", zero_division=0)
+    s3_f1_macro = f1_score(y3_true, y3_pred, average="macro", zero_division=0)
+
     if debug_samples > 0 and len(dbg_texts) > 0:
         print("\n===== DEBUG EVAL SAMPLES =====")
-        print(f"s1_threshold={s1_threshold}")
+        print(f"s1_threshold(legacy/no-op)={s1_threshold}")
         for i in range(min(debug_samples, len(dbg_texts))):
             t = dbg_texts[i]
-            y1_i = np.asarray(dbg_y1[i]).astype(int).tolist()
-            p1_i = np.asarray(dbg_p1[i]).astype(int).tolist()
+            y1_i = int(dbg_y1[i])
+            p1_i = int(dbg_p1[i])
             prob1_i = np.asarray(dbg_prob1[i]).tolist()
             y2_i = int(dbg_y2[i])
             p2_i = int(dbg_p2[i])
             y3_i = int(dbg_y3[i])
             p3_i = int(dbg_p3[i])
 
-            # 打印时只显示 S1 命中的索引，避免 8维全展开太难看
-            y1_ids = [j for j, v in enumerate(y1_i) if v == 1]
-            p1_ids = [j for j, v in enumerate(p1_i) if v == 1]
             top_s1 = sorted(list(enumerate(prob1_i)), key=lambda x: x[1], reverse=True)[:5]
 
             print(f"\n[#{i}] text={t}")
-            print(f"  S1 true_ids={y1_ids} pred_ids={p1_ids} top5_probs={top_s1}")
+            print(
+                f"  S1 true={y1_i}({S1_LABELS[y1_i]}) pred={p1_i}({S1_LABELS[p1_i]}) top5_probs={top_s1}"
+            )
             print(f"  S2 true={y2_i}({S2_LABELS[y2_i]}) pred={p2_i}({S2_LABELS[p2_i]})")
             print(f"  S3 true={y3_i}({S3_LABELS[y3_i]}) pred={p3_i}({S3_LABELS[p3_i]})")
 
+        print("\n[S1 confusion_matrix] rows=true cols=pred (19x19, truncated if large)")
+        print(confusion_matrix(y1_true, y1_pred, labels=list(range(len(S1_LABELS)))))
         print("\n[S2 confusion_matrix] rows=true cols=pred")
         print(confusion_matrix(y2_true, y2_pred, labels=list(range(len(S2_LABELS)))))
         print("\n[S3 confusion_matrix] rows=true cols=pred")
@@ -215,9 +239,7 @@ def evaluate(
         print("===== END DEBUG =====\n")
 
     return {
-        "s1_subset_acc": float(s1_subset_acc),
-        "s1_precision_micro": float(s1_precision_micro),
-        "s1_recall_micro": float(s1_recall_micro),
+        "s1_accuracy": float(s1_acc),
         "s1_precision_macro": float(s1_precision_macro),
         "s1_recall_macro": float(s1_recall_macro),
         "s2_accuracy": float(s2_acc),
@@ -226,6 +248,9 @@ def evaluate(
         "s3_accuracy": float(s3_acc),
         "s3_precision_macro": float(s3_precision_macro),
         "s3_recall_macro": float(s3_recall_macro),
+        "s1_f1_macro": float(s1_f1_macro),
+        "s2_f1_macro": float(s2_f1_macro),
+        "s3_f1_macro": float(s3_f1_macro),
     }
 
 
@@ -265,7 +290,7 @@ def build_dataloaders(
 
     inds = np.arange(len(texts), dtype=np.int64)
 
-    strat1 = labels_s2 if len(set(labels_s2)) > 1 else None
+    strat_s3 = labels_s3 if len(set(labels_s3)) > 1 else None
     x_trainval, x_test, i_trainval, i_test, y1_trainval, y1_test, y2_trainval, y2_test, y3_trainval, y3_test = safe_split(
         texts,
         inds,
@@ -273,10 +298,10 @@ def build_dataloaders(
         labels_s2,
         labels_s3,
         test_size=test_ratio,
-        stratify=strat1,
+        stratify=strat_s3,
     )
 
-    strat2 = y2_trainval if len(set(y2_trainval)) > 1 else None
+    strat2 = y3_trainval if len(set(y3_trainval)) > 1 else None
     x_train, x_val, i_train, i_val, y1_train, y1_val, y2_train, y2_val, y3_train, y3_val = safe_split(
         x_trainval,
         i_trainval,
@@ -347,12 +372,44 @@ def main():
     parser.add_argument("--s1_loss_weight", type=float, default=1.0)
     parser.add_argument("--s2_loss_weight", type=float, default=2.0)
     parser.add_argument("--s3_loss_weight", type=float, default=5.0)
+    parser.add_argument(
+        "--s3_label_smoothing",
+        type=float,
+        default=0.0,
+        help="S3 CrossEntropy 的 label smoothing（0~0.2）；抑制过置信；与 --s3_focal_gamma 同开时忽略本项",
+    )
+    parser.add_argument(
+        "--s3_focal_gamma",
+        type=float,
+        default=0.0,
+        help="S3 Focal Loss 的 γ（如 1~2）；>0 时用 Focal 替代 S3 的 CE，减轻易分样本主导与过置信",
+    )
     parser.add_argument("--debug_s1_stats", action="store_true")
     parser.add_argument("--debug_eval_samples", type=int, default=0, help=">0 时打印验证/测试样本与混淆矩阵")
-    parser.add_argument("--use_s1_pos_weight", action="store_true", help="给 S1 的 BCE 加 pos_weight，缓解全0预测")
+    parser.add_argument(
+        "--use_s1_pos_weight",
+        action="store_true",
+        help="给 S1 的 CrossEntropy 加 balanced class weight（沿用参数名以兼容旧命令行）",
+    )
     parser.add_argument("--use_s2_class_weight", action="store_true", help="给 S2 的 CE 加 class weight，缓解全预测 none")
     parser.add_argument("--use_s3_class_weight", action="store_true", help="给 S3 的 CE 加 class weight，缓解全预测 none")
-    parser.add_argument("--use_weighted_sampler", action="store_true", help="按 S1 是否为正样本做采样，让 batch 更容易含正例")
+    parser.add_argument(
+        "--use_weighted_sampler",
+        action="store_true",
+        help="按 S3 是否非 3.6 过采样危机类；与 --use_s3_class_balanced_sampler 同时开则后者优先",
+    )
+    parser.add_argument(
+        "--use_s3_class_balanced_sampler",
+        action="store_true",
+        help="训练集按 S3 六类逆频采样，少数类步数增多，利于学清类型（多数类 accuracy 常下降）",
+    )
+    parser.add_argument(
+        "--best_select",
+        type=str,
+        default="acc_sum",
+        choices=["acc_sum", "s3_macro_f1", "macro_f1_sum"],
+        help="存 best 的依据：acc_sum=三任务accuracy之和；s3_macro_f1=验证集S3宏F1；macro_f1_sum=三任务宏F1之和",
+    )
     parser.add_argument("--val_ratio", type=float, default=0.1)
     parser.add_argument("--test_ratio", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
@@ -382,11 +439,11 @@ def main():
     texts, labels_s1, labels_s2, labels_s3, csv_format = load_multitask_supervision(df)
     print(f"[data] format={csv_format} n={len(texts)} path={args.weibo_csv_path}")
 
-    s1_mat = np.asarray(labels_s1, dtype=np.float32)
-    n_pos = int((s1_mat.sum(axis=1) > 0).sum())
-    pos_rate = n_pos / max(len(labels_s1), 1)
-    per_dim = s1_mat.sum(axis=0).tolist()
-    print(f"[S1 stats] nonzero_rows={n_pos}/{len(labels_s1)} ({pos_rate:.3f})  per_label_counts={per_dim}")
+    y1_arr = np.asarray(labels_s1, dtype=np.int64)
+    n_non_other = int((y1_arr != 15).sum())
+    pos_rate = n_non_other / max(len(labels_s1), 1)
+    per_dim = np.bincount(y1_arr, minlength=len(S1_LABELS)).tolist()
+    print(f"[S1 stats] not_other_15_rows={n_non_other}/{len(labels_s1)} ({pos_rate:.3f}) per_class_counts={per_dim}")
     if args.debug_s1_stats:
         print("[S1 sample]", labels_s1[:10])
 
@@ -478,22 +535,34 @@ def main():
     if os.path.isfile(train_log_path):
         os.remove(train_log_path)
 
-    # 可选：WeightedRandomSampler（让 batch 更容易包含 S1 正例，避免“全空预测最安全”）
-    if args.use_weighted_sampler:
-        y1_train = np.asarray(split_stats["y1_train"], dtype=np.float32)
-        is_pos = (y1_train.sum(axis=1) > 0).astype(np.int64)
-        n_pos = int(is_pos.sum())
-        n_neg = int(len(is_pos) - n_pos)
+    # 可选采样：S3 类均衡（逆频）优先于「危机 vs 3.6」二分类过采样
+    y3_tr = np.asarray(split_stats["y3_train"], dtype=np.int64)
+    if args.use_s3_class_balanced_sampler:
+        counts = np.bincount(y3_tr, minlength=len(S3_LABELS)).astype(np.float64)
+        counts = np.maximum(counts, 1.0)
+        inv_per_sample = 1.0 / counts[y3_tr]
+        weights = (inv_per_sample / inv_per_sample.mean()).astype(np.float32)
+        sampler = WeightedRandomSampler(
+            weights=torch.from_numpy(weights),
+            num_samples=len(weights),
+            replacement=True,
+        )
+        train_loader = DataLoader(train_loader.dataset, batch_size=args.batch_size, sampler=sampler)
+        print(f"[Sampler] S3 class-balanced (inv-freq). train class counts={counts.astype(int).tolist()}")
+    elif args.use_weighted_sampler:
+        is_risk = (y3_tr < 5).astype(np.int64)  # 0..4 = 3.1–3.5，5 = 3.6 none
+        n_pos = int(is_risk.sum())
+        n_neg = int(len(is_risk) - n_pos)
         w_pos = (n_pos + n_neg) / max(n_pos, 1)
         w_neg = (n_pos + n_neg) / max(n_neg, 1)
-        weights = np.where(is_pos == 1, w_pos, w_neg).astype(np.float32)
+        weights = np.where(is_risk == 1, w_pos, w_neg).astype(np.float32)
         sampler = WeightedRandomSampler(
             weights=torch.tensor(weights),
             num_samples=len(weights),
             replacement=True,
         )
         train_loader = DataLoader(train_loader.dataset, batch_size=args.batch_size, sampler=sampler)
-        print(f"[Sampler] enabled. n_pos={n_pos} n_neg={n_neg} w_pos={w_pos:.3f} w_neg={w_neg:.3f}")
+        print(f"[Sampler] S3-risk upsample. n_risk={n_pos} n_safe={n_neg} w_risk={w_pos:.3f} w_safe={w_neg:.3f}")
 
     resolved_backbone_dir = model_dir
 
@@ -550,24 +619,21 @@ def main():
     warmup_steps = int(total_steps * args.warmup_ratio)
     scheduler = get_linear_schedule_with_warmup(optimizer, warmup_steps, total_steps)
 
-    # ===== Loss：支持 class weight / pos_weight =====
-    # S1 pos_weight：pos_weight[i] = N_neg[i] / N_pos[i]
-    bce_kwargs = {}
+    # ===== Loss：S1/S2/S3 CE，可选 class weight =====
+    ce_s1_kwargs = {}
     if args.use_s1_pos_weight:
-        y1_train = np.asarray(split_stats["y1_train"], dtype=np.float32)
-        pos = y1_train.sum(axis=0)
-        neg = y1_train.shape[0] - pos
-        # 避免除0：若某类完全没有正样本，则该维度 pos_weight 设为 1（等价不加权）
-        pos_weight = np.where(pos > 0, neg / np.maximum(pos, 1.0), 1.0).astype(np.float32)
-        pos_weight_t = torch.tensor(pos_weight, device=device)
-        print(f"[S1 pos_weight] {pos_weight.tolist()}")
-        bce_kwargs["pos_weight"] = pos_weight_t
+        y1_train = np.asarray(split_stats["y1_train"], dtype=np.int64)
+        weights = _balanced_class_weights_vector(y1_train, len(S1_LABELS))
+        ce_s1_kwargs["weight"] = torch.tensor(weights, device=device)
+        counts = np.bincount(y1_train, minlength=len(S1_LABELS)).astype(np.int64)
+        print(f"[S1 class_weight] counts={counts.tolist()} weights={weights.tolist()}")
 
-    bce = nn.BCEWithLogitsLoss(**bce_kwargs)
+    ce_s1 = nn.CrossEntropyLoss(**ce_s1_kwargs)
 
     # S2 / S3 class weight：weight[c] ~ 1 / freq[c]
     ce_s2_kwargs = {}
     ce_s3_kwargs = {}
+    s3_class_w_tensor: Optional[torch.Tensor] = None
 
     if args.use_s2_class_weight:
         y2_train = np.asarray(split_stats["y2_train"], dtype=np.int64)
@@ -590,6 +656,21 @@ def main():
             print(f"[S3 class_weight] 训练子集中未出现的类别（权重保持1.0）: {missing}")
         print(f"[S3 class_weight] counts={counts.tolist()} weights={weights.tolist()}")
         ce_s3_kwargs["weight"] = w
+        s3_class_w_tensor = w
+
+    focal_g = float(args.s3_focal_gamma)
+    ls3 = float(args.s3_label_smoothing)
+    use_s3_focal = focal_g > 0
+    if use_s3_focal and ls3 > 0:
+        print("[S3] s3_focal_gamma>0：已忽略 s3_label_smoothing（避免与 Focal 混用）")
+        ls3 = 0.0
+    if not use_s3_focal and ls3 > 0:
+        ls3 = min(ls3, 0.5)
+        ce_s3_kwargs["label_smoothing"] = ls3
+        print(f"[S3] label_smoothing={ls3}")
+    if use_s3_focal:
+        focal_g = min(focal_g, 5.0)
+        print(f"[S3] focal_loss gamma={focal_g}")
 
     ce_s2 = nn.CrossEntropyLoss(**ce_s2_kwargs)
     ce_s3 = nn.CrossEntropyLoss(**ce_s3_kwargs)
@@ -601,6 +682,11 @@ def main():
 
     for epoch in range(args.epochs):
         model.train()
+        train_loss_sum = 0.0
+        train_loss_s1_sum = 0.0
+        train_loss_s2_sum = 0.0
+        train_loss_s3_sum = 0.0
+        train_n_batches = 0
         pbar = tqdm(train_loader, desc=f"epoch {epoch+1}/{args.epochs}")
         for batch in pbar:
             input_ids = batch["input_ids"].to(device)
@@ -614,9 +700,12 @@ def main():
             s2_logits = out["s2_logits"]
             s3_logits = out["s3_logits"]
 
-            loss_s1 = bce(s1_logits, labels_s1)
+            loss_s1 = ce_s1(s1_logits, labels_s1)
             loss_s2 = ce_s2(s2_logits, labels_s2)
-            loss_s3 = ce_s3(s3_logits, labels_s3)
+            if use_s3_focal:
+                loss_s3 = _s3_focal_loss(s3_logits, labels_s3, focal_g, s3_class_w_tensor)
+            else:
+                loss_s3 = ce_s3(s3_logits, labels_s3)
 
             loss = (
                 args.s1_loss_weight * loss_s1
@@ -630,7 +719,23 @@ def main():
             optimizer.step()
             scheduler.step()
 
-            pbar.set_postfix({"loss": float(loss.item())})
+            li = float(loss.item())
+            train_loss_sum += li
+            train_loss_s1_sum += float(loss_s1.item())
+            train_loss_s2_sum += float(loss_s2.item())
+            train_loss_s3_sum += float(loss_s3.item())
+            train_n_batches += 1
+            pbar.set_postfix({"loss": li})
+
+        denom = max(train_n_batches, 1)
+        train_loss_mean = train_loss_sum / denom
+        train_loss_s1_mean = train_loss_s1_sum / denom
+        train_loss_s2_mean = train_loss_s2_sum / denom
+        train_loss_s3_mean = train_loss_s3_sum / denom
+        print(
+            f"[Train] epoch={epoch+1} loss_mean={train_loss_mean:.4f} "
+            f"(s1={train_loss_s1_mean:.4f} s2={train_loss_s2_mean:.4f} s3={train_loss_s3_mean:.4f})"
+        )
 
         val_metrics = evaluate(
             model,
@@ -639,18 +744,36 @@ def main():
             s1_threshold=args.s1_threshold,
             debug_samples=args.debug_eval_samples,
         )
-        # 一个简单的综合指标：S2/S3准确率 + S1 micro precision + S1 micro recall
-        composite = (
-            val_metrics["s2_accuracy"]
-            + val_metrics["s3_accuracy"]
-            + 0.5 * val_metrics["s1_precision_micro"]
-            + 0.5 * val_metrics["s1_recall_micro"]
+        if args.best_select == "acc_sum":
+            composite = (
+                val_metrics["s1_accuracy"]
+                + val_metrics["s2_accuracy"]
+                + val_metrics["s3_accuracy"]
+            )
+        elif args.best_select == "s3_macro_f1":
+            composite = val_metrics["s3_f1_macro"]
+        else:
+            composite = (
+                val_metrics["s1_f1_macro"]
+                + val_metrics["s2_f1_macro"]
+                + val_metrics["s3_f1_macro"]
+            )
+        print(
+            f"[Val] epoch={epoch+1} best_select={args.best_select} composite={composite:.4f} metrics={val_metrics}"
         )
-        print(f"[Val] epoch={epoch+1} metrics={val_metrics}")
         with open(train_log_path, "a", encoding="utf-8") as tlf:
             tlf.write(
                 json.dumps(
-                    {"epoch": epoch + 1, "val_metrics": val_metrics, "composite": composite},
+                    {
+                        "epoch": epoch + 1,
+                        "train_loss_mean": train_loss_mean,
+                        "train_loss_s1_mean": train_loss_s1_mean,
+                        "train_loss_s2_mean": train_loss_s2_mean,
+                        "train_loss_s3_mean": train_loss_s3_mean,
+                        "val_metrics": val_metrics,
+                        "best_select": args.best_select,
+                        "composite": composite,
+                    },
                     ensure_ascii=False,
                 )
                 + "\n"
@@ -668,17 +791,38 @@ def main():
             tokenizer.save_pretrained(best_full_base_path)
 
     # 最终在 test 集测试 best
-    print(f"Best composite={best_metric:.6f}")
+    print(f"Best composite ({args.best_select})={best_metric:.6f}")
     if best_metric <= -1.0:
         raise RuntimeError("训练未产生有效的 best checkpoint（composite 未更新）。")
 
+    # 合并评估：不能 from_pretrained(best_full_base_with_heads)。
+    # 训练时 base_model.model 在 LoRA 注入后存盘键名为 query.base_layer / lora_* ，与标准 BERT 不匹配，
+    # 会导致整段 BERT 随机初始化、仅头可能对齐，验证集指标会崩。
+    bin_path = os.path.join(best_full_base_path, "pytorch_model.bin")
+    if not os.path.isfile(bin_path):
+        raise FileNotFoundError(f"缺少三头权重文件: {bin_path}")
+    raw_sd = torch.load(bin_path, map_location="cpu")
+    head_sd = {
+        k: v
+        for k, v in raw_sd.items()
+        if k.startswith(("s1_head.", "s2_head.", "s3_head."))
+    }
+    if len(head_sd) < 6:
+        raise RuntimeError(
+            f"从 {bin_path} 未解析到完整三头权重（期望 s1/s2/s3_head.*），无法合并。"
+        )
+
     base = MultiTaskBertForPsychology.from_pretrained(
-        best_full_base_path,
+        resolved_backbone_dir,
         local_files_only=True,
         num_s1_labels=len(S1_LABELS),
         num_s2_labels=len(S2_LABELS),
         num_s3_labels=len(S3_LABELS),
     )
+    miss, unexpected = base.load_state_dict(head_sd, strict=False)
+    if miss or unexpected:
+        print(f"[merge] load heads strict=False missing={len(miss)} unexpected={len(unexpected)}")
+
     peft_wrap = PeftModel.from_pretrained(base, best_adapter_path, is_trainable=False)
     merged_model = peft_wrap.merge_and_unload()
     merged_model.save_pretrained(best_state_path, safe_serialization=False)
@@ -721,6 +865,10 @@ def main():
         "metrics_val_merged_best_ckpt": val_metrics_final,
         "metrics_test_merged_best_ckpt": test_metrics,
         "s1_threshold": args.s1_threshold,
+        "best_select": args.best_select,
+        "use_s3_class_balanced_sampler": bool(args.use_s3_class_balanced_sampler),
+        "s3_focal_gamma": float(args.s3_focal_gamma),
+        "s3_label_smoothing": float(args.s3_label_smoothing),
     }
     report_path = os.path.join(args.output_dir, "metrics_report.json")
     with open(report_path, "w", encoding="utf-8") as rf:

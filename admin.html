@@ -30,43 +30,43 @@
             <h2 class="text-sm font-bold text-gray-800 flex items-center gap-2">
                 <i class="ri-settings-3-line"></i> AI reply API (backend)
             </h2>
-            <p class="text-xs text-gray-600">配置写入服务器 SQLite。API Key 保存后不再回显；留空表示沿用已保存的 Key。</p>
+            <p class="text-xs text-gray-600">Settings are stored in server SQLite. The API key is never shown again after save; leave blank to keep the stored key.</p>
 
             <div class="rounded-lg border border-gray-300 bg-white/80 p-3">
                 <label class="flex items-center justify-between text-sm font-medium text-gray-800">
-                    <span>启用外部 LLM（关闭则对话走英文 fallback，不调接口）</span>
+                    <span>Enable external LLM (if off, chat uses English fallback; no upstream call)</span>
                     <input v-model="llm.llm_enabled" type="checkbox" class="scale-110">
                 </label>
                 <label class="flex items-start gap-2 cursor-pointer text-xs text-gray-800 max-w-3xl mt-2">
                     <input v-model="llm.chat_llm_http_stream" type="checkbox" class="mt-0.5 scale-110 shrink-0">
-                    <span><strong>对话走 HTTP 流式</strong>（对上游发 <code class="text-[10px]">stream:true</code>，前端仍用 SSE 收事件）。<strong>取消勾选</strong>即<strong>关闭上游流式</strong>，改为一次整包 <code class="text-[10px]">stream:false</code>，通常能避免流式解析导致的半截回复；咨询师人设仍在系统提示词里，与是否流式无关。</span>
+                    <span><strong>Upstream HTTP streaming</strong> (sends <code class="text-[10px]">stream:true</code> to the provider; the browser still uses SSE). <strong>Uncheck</strong> to use a single non-streaming request (<code class="text-[10px]">stream:false</code>), which often avoids truncated replies from stream parsing. Persona lives in the system prompt and does not depend on this.</span>
                 </label>
             </div>
 
             <div class="rounded-lg border-2 border-emerald-200 bg-emerald-50/40 p-3 space-y-2">
-                <h3 class="text-sm font-bold text-emerald-900">① 本地 Ollama</h3>
-                <p class="text-[11px] text-gray-600">仅本机 <code class="bg-white px-1 rounded">127.0.0.1:11434</code>，一般不需要 API Key。与下方第三方 API 共用同一份「当前配置」，一次只选一种连法。</p>
+                <h3 class="text-sm font-bold text-emerald-900">① Local Ollama</h3>
+                <p class="text-[11px] text-gray-600">Uses <code class="bg-white px-1 rounded">127.0.0.1:11434</code> on this machine; usually no API key. Shares the same active config as third-party API below—use one connection mode at a time.</p>
                 <label class="flex items-center justify-between text-xs font-medium text-gray-800 max-w-md border rounded px-2 py-2 bg-white">
-                    <span>{{ ollamaLocalMode ? '已选：Ollama 本地' : '未使用 Ollama' }}</span>
+                    <span>{{ ollamaLocalMode ? 'Using local Ollama' : 'Ollama not selected' }}</span>
                     <input v-model="ollamaLocalMode" @change="onOllamaToggle" type="checkbox">
                 </label>
             </div>
 
             <div class="rounded-lg border-2 border-sky-200 bg-sky-50/40 p-3 space-y-3">
-                <h3 class="text-sm font-bold text-sky-900">② 第三方 API（DeepSeek / OpenAI 兼容代理等）</h3>
+                <h3 class="text-sm font-bold text-sky-900">② Third-party API (DeepSeek, OpenAI-compatible proxies, etc.)</h3>
                 <p class="text-[11px] text-gray-700 leading-relaxed">
-                    按顺序：<strong>Base URL</strong> → <strong>Path</strong> → <strong>模型名（必须是接口注册的 id）</strong> → <strong>API Key</strong> → 点 <strong>Save</strong>。
-                    然后再用下方「保存为命名预设」存成方案，之后用下拉 <strong>应用到当前</strong> 切换（Key 仍留在服务器，不写入预设）。
+                    Fill in order: <strong>Base URL</strong> → <strong>Path</strong> → <strong>Model id</strong> (must match the API’s registered id) → <strong>API key</strong> → click <strong>Save</strong>.
+                    Then use <strong>Save as named preset</strong> below to store URL/model/sampling; switch presets from the dropdown with <strong>Apply to current</strong> (keys stay on the server and are not stored in presets).
                 </p>
                 <div class="p-2 rounded bg-amber-100/80 border border-amber-200 text-[11px] text-gray-800 space-y-1">
-                    <p><strong>DeepSeek 报错「Model Not Exist」？</strong> 网页上的「DeepSeek-V3.2」是展示名；API 里要用官方 id：
-                        <code class="bg-white px-1 rounded">deepseek-chat</code>（对话）或
-                        <code class="bg-white px-1 rounded">deepseek-reasoner</code>（思考模式）。</p>
-                    <p>官方 Base：<code class="bg-white px-1 rounded">https://api.deepseek.com</code>，Path：<code class="bg-white px-1 rounded">/chat/completions</code>（不是 <code class="bg-white px-1">/v1/chat/completions</code>）。<strong>Group 请留空</strong>。</p>
+                    <p><strong>DeepSeek “Model Not Exist”?</strong> Marketing names (e.g. DeepSeek-V3.2) differ from API ids. Use
+                        <code class="bg-white px-1 rounded">deepseek-chat</code> (chat) or
+                        <code class="bg-white px-1 rounded">deepseek-reasoner</code> (reasoning).</p>
+                    <p>Official base: <code class="bg-white px-1 rounded">https://api.deepseek.com</code>, path: <code class="bg-white px-1 rounded">/chat/completions</code> (not <code class="bg-white px-1">/v1/chat/completions</code>). Leave <strong>Group</strong> empty for DeepSeek.</p>
                 </div>
                 <div class="flex flex-wrap gap-2">
-                    <button type="button" @click="fillDeepSeekChat" class="text-xs px-2 py-1.5 rounded border bg-white">填入 DeepSeek：deepseek-chat</button>
-                    <button type="button" @click="fillDeepSeekReasoner" class="text-xs px-2 py-1.5 rounded border bg-white">填入 DeepSeek：deepseek-reasoner</button>
+                    <button type="button" @click="fillDeepSeekChat" class="text-xs px-2 py-1.5 rounded border bg-white">Fill DeepSeek: deepseek-chat</button>
+                    <button type="button" @click="fillDeepSeekReasoner" class="text-xs px-2 py-1.5 rounded border bg-white">Fill DeepSeek: deepseek-reasoner</button>
                 </div>
                 <div class="grid gap-2 sm:grid-cols-2">
                     <label class="block text-xs font-medium text-gray-700">API base URL
@@ -75,28 +75,28 @@
                     <label class="block text-xs font-medium text-gray-700">Endpoint path
                         <input v-model="llm.endpoint_path" type="text" class="mt-0.5 w-full border rounded px-2 py-1.5 text-sm" placeholder="/chat/completions">
                     </label>
-                    <label class="block text-xs font-medium text-gray-700">Model（接口 id，勿填展示名）
+                    <label class="block text-xs font-medium text-gray-700">Model (API id, not display name)
                         <input v-model="llm.model" type="text" class="mt-0.5 w-full border rounded px-2 py-1.5 text-sm" placeholder="deepseek-chat">
                     </label>
-                    <label class="block text-xs font-medium text-gray-700">Group（DeepSeek 留空；仅部分代理需要）
-                        <input v-model="llm.api_group" type="text" class="mt-0.5 w-full border rounded px-2 py-1.5 text-sm" placeholder="留空">
+                    <label class="block text-xs font-medium text-gray-700">Group (empty for DeepSeek; some proxies need it)
+                        <input v-model="llm.api_group" type="text" class="mt-0.5 w-full border rounded px-2 py-1.5 text-sm" placeholder="Optional">
                     </label>
-                    <label class="block text-xs font-medium text-gray-700 sm:col-span-2">API key（Bearer）
-                        <input v-model="llm.api_key_input" @input="llmKeyDirty = true" type="password" autocomplete="off" class="mt-0.5 w-full border rounded px-2 py-1.5 text-sm" :placeholder="llm.has_api_key ? '•••••••• (留空则不改)' : '粘贴 Key 后保存'">
+                    <label class="block text-xs font-medium text-gray-700 sm:col-span-2">API key (Bearer)
+                        <input v-model="llm.api_key_input" @input="llmKeyDirty = true" type="password" autocomplete="off" class="mt-0.5 w-full border rounded px-2 py-1.5 text-sm" :placeholder="llm.has_api_key ? '•••••••• (leave blank to keep)' : 'Paste key, then Save'">
                     </label>
                 </div>
                 <details class="text-xs border rounded bg-white/90 px-2 py-2">
-                    <summary class="cursor-pointer font-medium text-gray-800">高级采样参数（会发给兼容接口；max_tokens=0 表示不传该字段）</summary>
+                    <summary class="cursor-pointer font-medium text-gray-800">Advanced sampling (sent to compatible APIs; max_tokens = 0 omits the field)</summary>
                     <div class="grid sm:grid-cols-2 gap-2 mt-2">
                         <label>Temperature <input v-model.number="llm.temperature" type="number" step="0.1" min="0" max="2" class="mt-0.5 w-full border rounded px-2 py-1"></label>
                         <label>Top P <input v-model.number="llm.top_p" type="number" step="0.05" min="0" max="1" class="mt-0.5 w-full border rounded px-2 py-1"></label>
                         <label>Frequency penalty <input v-model.number="llm.frequency_penalty" type="number" step="0.1" min="-2" max="2" class="mt-0.5 w-full border rounded px-2 py-1"></label>
                         <label>Presence penalty <input v-model.number="llm.presence_penalty" type="number" step="0.1" min="-2" max="2" class="mt-0.5 w-full border rounded px-2 py-1"></label>
-                        <label class="sm:col-span-2">Max tokens（0=省略，由上游默认上下文决定）
+                        <label class="sm:col-span-2">Max tokens (0 = omit; provider default context)
                             <input v-model.number="llm.max_tokens" type="number" step="64" min="0" max="128000" class="mt-0.5 w-full border rounded px-2 py-1"></label>
                         <label class="sm:col-span-2 flex items-start gap-2 cursor-pointer">
                             <input v-model="llm.nonstream_http_fallback" type="checkbox" class="mt-0.5 scale-110 shrink-0">
-                            <span>仅在<strong>已勾选「对话走 HTTP 流式」</strong>时生效：流式无内容或失败时，允许再发一次非流式请求补全。取消勾选则只做 <code class="text-[10px]">stream:true</code>（便于排查）。若已关闭上游流式，本项无影响。</span>
+                            <span>Only when <strong>Upstream HTTP streaming</strong> is on: if streaming returns nothing or fails, allow one extra non-streaming request. Uncheck to use streaming only (easier to debug). No effect if upstream streaming is off.</span>
                         </label>
                     </div>
                 </details>
@@ -109,19 +109,19 @@
             </div>
 
             <div class="rounded-lg border border-amber-300/80 bg-white/90 p-3">
-                <h3 class="text-xs font-bold text-gray-800 mb-1">③ 命名预设（不含 API Key）</h3>
-                <p class="text-[11px] text-gray-600 mb-2">先完成上方填写并 <strong>Save</strong>（含 Key），再「保存为命名预设」存 URL/模型/采样等；以后用下拉加载并「应用到当前」。</p>
+                <h3 class="text-xs font-bold text-gray-800 mb-1">③ Named presets (no API key)</h3>
+                <p class="text-[11px] text-gray-600 mb-2">Complete the form above and <strong>Save</strong> (including key if needed), then <strong>Save as named preset</strong> to store URL/model/sampling. Load a preset from the dropdown and <strong>Apply to current</strong>.</p>
                 <div class="flex flex-wrap items-end gap-2">
                     <label class="block text-xs font-medium text-gray-700 min-w-[10rem] flex-1">
-                        选择预设
+                        Preset
                         <select v-model="selectedPresetId" class="mt-0.5 w-full border rounded px-2 py-1.5 text-sm">
                             <option value="">— Select —</option>
                             <option v-for="p in llmPresets" :key="p.id" :value="String(p.id)">{{ p.name }}</option>
                         </select>
                     </label>
-                    <button type="button" @click="applySavedPreset" :disabled="!selectedPresetId" class="px-3 py-1.5 rounded text-sm border disabled:opacity-40">应用到当前</button>
-                    <button type="button" @click="saveNamedPreset" class="px-3 py-1.5 rounded text-sm border">保存为命名预设…</button>
-                    <button type="button" @click="deleteSavedPreset" :disabled="!selectedPresetId" class="px-3 py-1.5 rounded text-sm border border-red-200 text-red-700 disabled:opacity-40">删除预设</button>
+                    <button type="button" @click="applySavedPreset" :disabled="!selectedPresetId" class="px-3 py-1.5 rounded text-sm border disabled:opacity-40">Apply to current</button>
+                    <button type="button" @click="saveNamedPreset" class="px-3 py-1.5 rounded text-sm border">Save as named preset…</button>
+                    <button type="button" @click="deleteSavedPreset" :disabled="!selectedPresetId" class="px-3 py-1.5 rounded text-sm border border-red-200 text-red-700 disabled:opacity-40">Delete preset</button>
                 </div>
             </div>
         </div>
@@ -167,12 +167,23 @@
                     </div>
                 </div>
                 <div class="p-3 border-t flex flex-wrap gap-2 shrink-0 items-center">
-                    <button @click="takeoverSelected" class="px-3 py-1 border rounded text-sm whitespace-nowrap">Take over</button>
-                    <button @click="releaseSelected" class="px-3 py-1 border rounded text-sm whitespace-nowrap">Release to AI (low risk)</button>
+                    <button
+                        type="button"
+                        @click="takeoverSelected"
+                        :disabled="!adminConversationId || takeoverBusy"
+                        class="px-3 py-1 border rounded text-sm whitespace-nowrap transition-all active:scale-95 disabled:opacity-45 disabled:cursor-not-allowed hover:bg-gray-50"
+                    >{{ takeoverBusy ? 'Taking over…' : 'Take over' }}</button>
+                    <button
+                        type="button"
+                        @click="releaseSelected"
+                        :disabled="!adminConversationId || releaseBusy"
+                        class="px-3 py-1 border rounded text-sm whitespace-nowrap transition-all active:scale-95 disabled:opacity-45 disabled:cursor-not-allowed hover:bg-emerald-50 border-emerald-300"
+                    >{{ releaseBusy ? 'Releasing…' : 'Release to AI (low risk)' }}</button>
+                    <span v-if="adminActionMsg" class="text-xs w-full sm:w-auto" :class="adminActionErr ? 'text-red-600' : 'text-emerald-700'">{{ adminActionMsg }}</span>
                     <button @click="deleteSelectedMessages" :disabled="!selectedMessageIds.length" class="px-3 py-1 border rounded text-sm whitespace-nowrap disabled:opacity-40">Delete selected</button>
                     <button @click="clearAllAdminMessages" class="px-3 py-1 border border-red-200 text-red-700 rounded text-sm whitespace-nowrap">Clear all messages</button>
                     <input v-model="adminReplyInput" @keyup.enter="sendAdminReply" class="flex-1 min-w-0 h-9 rounded border px-2 outline-none text-sm basis-[200px]" placeholder="Admin reply">
-                    <button @click="sendAdminReply" class="wx-btn-green px-3 rounded text-sm whitespace-nowrap">Send</button>
+                    <button type="button" @click="sendAdminReply" :disabled="sendReplyBusy" class="wx-btn-green px-3 rounded text-sm whitespace-nowrap disabled:opacity-50 transition-all active:scale-95">{{ sendReplyBusy ? 'Sending…' : 'Send' }}</button>
                 </div>
             </div>
         </div>
@@ -198,6 +209,11 @@
                 const selectedMessageIds = ref([]);
                 const adminReplyInput = ref('');
                 const adminWs = ref(null);
+                const takeoverBusy = ref(false);
+                const releaseBusy = ref(false);
+                const sendReplyBusy = ref(false);
+                const adminActionMsg = ref('');
+                const adminActionErr = ref(false);
 
                 const llm = ref({
                     llm_enabled: true,
@@ -242,7 +258,7 @@
                     llm.value.endpoint_path = '/chat/completions';
                     llm.value.api_group = '';
                     llm.value.model = modelId;
-                    llmMessage.value = '已填入 DeepSeek 官方地址与模型 id。请填写 API Key → Save → Test。';
+                    llmMessage.value = 'DeepSeek base URL and model id filled in. Enter API key → Save → Test.';
                     llmError.value = false;
                 };
                 const fillDeepSeekChat = () => fillDeepSeekBase('deepseek-chat');
@@ -250,7 +266,7 @@
 
                 const onOllamaToggle = () => {
                     if (ollamaLocalMode.value) applyOllamaLocalPreset();
-                    else llmMessage.value = '已关闭 Ollama。请在「第三方 API」中填写 Base / Path / 模型 / Key。';
+                    else llmMessage.value = 'Ollama off. Fill Base / Path / model / key under Third-party API.';
                 };
 
                 const applyOllamaLocalPreset = () => {
@@ -262,7 +278,7 @@
                     llm.value.api_key_input = '';
                     llmKeyDirty.value = true;
                     if (!llm.value.model) llm.value.model = 'qwen2.5:7b';
-                    llmMessage.value = 'Ollama 已填入。请确认本机 ollama serve 与模型名，Save 后 Test。';
+                    llmMessage.value = 'Ollama defaults filled. Ensure `ollama serve` is running and the model exists, then Save and Test.';
                     llmError.value = false;
                 };
 
@@ -432,10 +448,10 @@
                                 llmMessage.value = 'Ollama unreachable. Start Ollama first (`ollama serve`) and verify http://127.0.0.1:11434 is accessible.';
                             } else if (ollamaLocalMode.value && low.includes('404')) {
                                 llmMessage.value = 'Ollama endpoint/model mismatch. Use endpoint `/v1/chat/completions` and a valid model from `ollama list`.';
-                            } else                             if (ollamaLocalMode.value && (low.includes('model') && (low.includes('not found') || low.includes('does not exist')))) {
+                            } else if (ollamaLocalMode.value && (low.includes('model') && (low.includes('not found') || low.includes('does not exist')))) {
                                 llmMessage.value = 'Ollama model not found locally. Run `ollama pull <model>` then test again.';
                             } else if (low.includes('model not exist') || low.includes('model_not_exist') || (low.includes('invalid_request') && low.includes('model'))) {
-                                llmMessage.value = '接口返回「模型不存在」。DeepSeek 须填 API 注册的 id：deepseek-chat 或 deepseek-reasoner，不能填网页展示名如 DeepSeek-V3.2。点此区「填入 DeepSeek」按钮后 Save 再测。';
+                                llmMessage.value = 'API says model not found. For DeepSeek use registered ids: deepseek-chat or deepseek-reasoner (not marketing names). Use “Fill DeepSeek” here, Save, then Test.';
                             } else {
                                 llmMessage.value = `Test failed (${reason}): ${msg}`;
                             }
@@ -485,6 +501,8 @@
                 const selectAdminConversation = async (cid) => {
                     adminConversationId.value = cid;
                     selectedMessageIds.value = [];
+                    adminActionMsg.value = '';
+                    adminActionErr.value = false;
                     const resp = await fetch(`${API_BASE}/admin/conversation/${cid}`);
                     const data = await resp.json();
                     adminMessages.value = data.messages || [];
@@ -531,37 +549,76 @@
                 };
 
                 const takeoverSelected = async () => {
-                    if (!adminConversationId.value) return;
-                    await fetch(`${API_BASE}/admin/takeover`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ conversation_id: adminConversationId.value, admin_id: adminId.value })
-                    });
-                    await selectAdminConversation(adminConversationId.value);
-                    await refreshAdminQueue();
+                    if (!adminConversationId.value || takeoverBusy.value) return;
+                    takeoverBusy.value = true;
+                    adminActionMsg.value = '';
+                    adminActionErr.value = false;
+                    try {
+                        const resp = await fetch(`${API_BASE}/admin/takeover`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ conversation_id: adminConversationId.value, admin_id: adminId.value })
+                        });
+                        const body = await resp.text();
+                        if (!resp.ok) throw new Error(body || resp.statusText);
+                        adminActionMsg.value = 'Take over succeeded.';
+                        await selectAdminConversation(adminConversationId.value);
+                        await refreshAdminQueue();
+                    } catch (e) {
+                        adminActionErr.value = true;
+                        adminActionMsg.value = `Take over failed: ${String(e)}`;
+                    } finally {
+                        takeoverBusy.value = false;
+                    }
                 };
 
                 const releaseSelected = async () => {
-                    if (!adminConversationId.value) return;
-                    await fetch(`${API_BASE}/admin/release`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ conversation_id: adminConversationId.value, admin_id: adminId.value, manual_risk: '低风险' })
-                    });
-                    await selectAdminConversation(adminConversationId.value);
-                    await refreshAdminQueue();
+                    if (!adminConversationId.value || releaseBusy.value) return;
+                    releaseBusy.value = true;
+                    adminActionMsg.value = '';
+                    adminActionErr.value = false;
+                    try {
+                        const resp = await fetch(`${API_BASE}/admin/release`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                conversation_id: adminConversationId.value,
+                                admin_id: adminId.value,
+                                manual_risk: 'Low risk',
+                            }),
+                        });
+                        const body = await resp.text();
+                        if (!resp.ok) throw new Error(body || resp.statusText);
+                        adminActionMsg.value = 'Released to W (AI). User sees an English system line.';
+                        await selectAdminConversation(adminConversationId.value);
+                        await refreshAdminQueue();
+                    } catch (e) {
+                        adminActionErr.value = true;
+                        adminActionMsg.value = `Release failed: ${String(e)}`;
+                    } finally {
+                        releaseBusy.value = false;
+                    }
                 };
 
                 const sendAdminReply = async () => {
-                    if (!adminConversationId.value || !adminReplyInput.value.trim()) return;
+                    if (!adminConversationId.value || !adminReplyInput.value.trim() || sendReplyBusy.value) return;
                     const text = adminReplyInput.value;
                     adminReplyInput.value = '';
-                    await fetch(`${API_BASE}/admin/reply`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ conversation_id: adminConversationId.value, admin_id: adminId.value, text })
-                    });
-                    await selectAdminConversation(adminConversationId.value);
+                    sendReplyBusy.value = true;
+                    try {
+                        const resp = await fetch(`${API_BASE}/admin/reply`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ conversation_id: adminConversationId.value, admin_id: adminId.value, text })
+                        });
+                        if (!resp.ok) throw new Error(await resp.text());
+                        await selectAdminConversation(adminConversationId.value);
+                    } catch (e) {
+                        alert(String(e));
+                        adminReplyInput.value = text;
+                    } finally {
+                        sendReplyBusy.value = false;
+                    }
                 };
 
                 onMounted(async () => {
@@ -574,6 +631,7 @@
                 return {
                     pageQuery,
                     adminQueue, adminConversationId, adminMessages, selectedMessageIds, adminReplyInput,
+                    takeoverBusy, releaseBusy, sendReplyBusy, adminActionMsg, adminActionErr,
                     refreshAdminQueue, selectAdminConversation, takeoverSelected, releaseSelected, sendAdminReply,
                     deleteSelectedMessages, clearAllAdminMessages,
                     activeLeftTab, dbConversations, loadDbConversations,

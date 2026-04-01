@@ -22,6 +22,7 @@ sys.path = _ORIG_PATH
 
 import torch
 
+from multitask_config import DEFAULT_INFERENCE_MODEL_DIR
 from multitask_predict import predict_text, load_model
 
 
@@ -78,7 +79,7 @@ def main():
         with gr.Tabs():
             with gr.TabItem("Local model"):
                 model_dir_in = gr.Textbox(
-                    value="multitask_output/best_model",
+                    value=DEFAULT_INFERENCE_MODEL_DIR,
                     label="model_dir",
                     interactive=True,
                 )

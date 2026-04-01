@@ -1,15 +1,14 @@
-# Final Year Project — Multi-Task Psychological Modeling & Risk Demo
+# A WeChat Plugin Prototype for Fine-Grained User Psychological Risk Detection and Lightweight Response
 
-End-to-end pipeline for **weakly supervised** multi-task learning on Chinese text: **S1** (problem types, multi-label), **S2** (mental state, single-label), **S3** (risk, single-label), built on **Chinese BERT + LoRA**, plus a small **FastAPI** service, **SQLite** persistence, **WebSocket** updates, and prototype UIs (**`wechat_mock.html`**, **Gradio**).
+**FYP / coursework repository** — a **WeChat-style plugin prototype**: **fine-grained** multi-task signals (**S1** problem types, **S2** mental state, **S3** risk) drive **policy** (e.g. AI reply vs. human handoff), while **lightweight response** is provided by a configurable **external LLM** (OpenAI-compatible API) in the chat flow. Core detection uses **Chinese BERT + optional LoRA**; the stack includes **FastAPI**, **SQLite**, **WebSocket**, and prototype UIs (**`wechat_mock.html`**, **`admin.html`**, **Gradio**).
 
 ## Features
 
-- **Model**: `MultiTaskBertForPsychology` — shared BERT encoder + three heads; training with **LoRA** (`peft`).
-- **Training**: `train_multitask_lora.py` — stratified split, metrics, optional **S1 `pos_weight`**, **S2/S3 class weights**, task loss weights, **S1 threshold** (default `0.15`).
-- **Inference**: `multitask_predict.py` — structured JSON (may include Chinese display keys from `multitask_config`).
-- **Risk & policy**: `risk_scoring.py`, `policy_engine.py` — `action` such as `ai_reply` / `handoff_to_human`.
-- **Backend**: `backend_api.py` — REST + WebSocket, `chat_app.db` (`conversations`, `messages`, `inference_logs`), `/monitor/latest` for Gradio monitor tab.
-- **UI**: `wechat_mock.html` (chat + Moments); `admin.html` (queue takeover + LLM API settings stored in SQLite); `gradio.py` → `app_gradio.py` (local predict + backend log monitor).
+- **Detection model**: `MultiTaskBertForPsychology` — shared BERT encoder + three heads; training with **LoRA** (`peft`) via `train_multitask_lora.py` (stratified split, metrics, optional **S1 `pos_weight`**, **S2/S3 class weights**, task loss weights, **S1 threshold** default `0.15`).
+- **Inference**: `multitask_predict.py` — structured JSON (Chinese display keys from `multitask_config`); **risk** may combine model **S3** probabilities with `risk_scoring.py`; **action** from `policy_engine.py` (e.g. `ai_reply` / `handoff_to_human`).
+- **Lightweight response**: `backend_api.py` + `chat_llm.py` — streaming or non-streaming HTTP to upstream LLM; Admin UI stores **LLM base URL, model, sampling, streaming options** in SQLite (`/admin/llm-config`).
+- **Persistence & realtime**: `chat_app.db` — `conversations`, `messages`, `inference_logs`; WebSocket updates for user/admin clients.
+- **UI**: `wechat_mock.html` (chat + Moments); `admin.html` (queue, takeover, LLM settings); `gradio.py` → `app_gradio.py` (local predict + backend log monitor).
 
 ## Repository layout (main files)
 
@@ -19,14 +18,16 @@ End-to-end pipeline for **weakly supervised** multi-task learning on Chinese tex
 | `multitask_model.py` | Multi-head BERT model |
 | `train_multitask_lora.py` | LoRA training |
 | `multitask_predict.py` | CLI / library inference |
+| `risk_scoring.py`, `policy_engine.py` | Risk score & routing action |
+| `chat_llm.py` | Upstream LLM HTTP client (stream / non-stream) |
 | `eval_only.py` | Standalone eval on CSV split |
-| `merge_peft_to_best_model.py` | Merge adapter + base if training ends after saving checkpoints |
+| `merge_peft_to_best_model.py` | 训练若未跑到自动合并：用 `converted_bert_pytorch` + 三头 + adapter 生成 `best_model`（勿单独加载 `best_full_base_with_heads` 当标准 BERT） |
 | `backend_api.py` | FastAPI app |
 | `wechat_mock.html` | User chat + Moments demo client |
-| `admin.html` | Admin queue + configurable reply LLM (`/admin/llm-config`) |
+| `admin.html` | Admin queue + LLM API settings |
 | `app_gradio.py` | Gradio UI |
 | `gradio.py` | Thin launcher (avoids shadowing the `gradio` package) |
-| `后端多任务模型说明文档.md` | Design notes (English body in repo version) |
+| `后端多任务模型说明文档.md` | Backend multitask model design (detailed) |
 
 ## Environment
 
@@ -68,6 +69,12 @@ Full run (example):
 python train_multitask_lora.py --device cuda --epochs 8 --batch_size 16 --max_length 128 --output_dir multitask_output_v3
 ```
 
+EFA 导出 CSV（`dataset_efaqa_multitask.csv`）示例：
+
+```bash
+python train_multitask_lora.py --weibo_csv_path dataset_efaqa_multitask.csv --epochs 15 --output_dir multitask_output
+```
+
 Artifacts typically include:
 
 - `best_model/` — merged weights for inference  
@@ -80,6 +87,8 @@ If training stops after saving `best_full_base_with_heads` + `best_peft_adapter`
 python merge_peft_to_best_model.py --output_dir multitask_output_v3
 ```
 
+Requires `{output_dir}/converted_bert_pytorch/` (same run as training).
+
 ## Inference
 
 ```bash
@@ -88,9 +97,39 @@ python multitask_predict.py --model_dir multitask_output_v3/best_model --text "�
 
 ## Evaluation
 
+默认（仓库根目录、存在 `dataset_efaqa_multitask.csv`）：模型 `multitask_output/best_model`，数据优先 EFA CSV。
+
 ```bash
-python eval_only.py --model_dir multitask_output_v3/best_model --device cuda
+python eval_only.py --device cuda
 ```
+
+混淆矩阵图 + JSON 报告：
+
+```bash
+python eval_only.py --plots_dir eval_plots --save_json eval_report.json
+```
+
+与训练时 **同一 val/test 划分**（训练需加 `--save_split_indices`）：
+
+```bash
+python eval_only.py --split_npz multitask_output/split_indices.npz --weibo_csv_path dataset_efaqa_multitask.csv
+```
+
+训练曲线（`training_log.jsonl` 需为新版，含 `train_loss_mean`；旧日志仅 val 曲线完整）：
+
+```bash
+python plot_training_log.py --log multitask_output/training_log.jsonl --out training_curves.png
+```
+
+EFA / multitask CSV 类别与文本长度分布：
+
+```bash
+python visualize_efaqa_dataset.py --csv dataset_efaqa_multitask.csv --out efaqa_eda.png
+```
+
+## API 默认模型路径
+
+`backend_api.py` 中请求体默认 `model_dir` 为 `multitask_output/best_model`。请在**项目根目录**启动 uvicorn，或在前端/请求里传入你实际的 `best_model` 目录。
 
 ## Backend API + realtime demo
 
@@ -104,6 +143,8 @@ Open `wechat_mock.html` in a browser. If the backend is not on `8010`, use:
 
 `wechat_mock.html?api=http://127.0.0.1:<PORT>`
 
+**Admin** (queue + LLM config): open `admin.html` with the same `?api=` base if needed.
+
 ## Gradio
 
 ```bash
@@ -115,11 +156,13 @@ python gradio.py
 
 ## Label space (current code)
 
-Align with `multitask_config.py`:
+Aligned with **EFA (Emotional First Aid)** taxonomy in `multitask_config.py` (English ids such as `efa_s1_*`, `efa_s2_*`, `efa_s3_*`):
 
-- **S1**: 8 multi-label problem types.  
-- **S2**: `depression`, `anxiety`, `none` (3 classes).  
-- **S3**: `suicide_ideation`, `self_harm`, `none` (3 classes).
+- **S1**: **19-class single-label** (EFA 1.1–1.19).  
+- **S2**: **8-class** (EFA 2.1–2.8, including “尚未达到 S2”).  
+- **S3**: **6-class** (EFA 3.1–3.6). **Classes 3.1–3.5** force **`handoff_to_human`** regardless of `risk_score` thresholds.
+
+**Breaking change:** older checkpoints with 8/3/3 heads are incompatible—retrain with `train_multitask_lora.py`. Export labeled CSV from the licensed corpus via `export_efaqa_to_csv.py` (set `EFAQA_DL_LICENSE`).
 
 ## License
 
@@ -127,4 +170,4 @@ See [LICENSE](LICENSE) in the repository root (MIT if present).
 
 ## Citation / coursework
 
-If this README is used for a thesis or report, cite your own institution’s rules; the technical design is summarized in `后端多任务模型说明文档.md`.
+Use your institution’s thesis/report rules. **English project title:** *A WeChat Plugin Prototype for Fine-Grained User Psychological Risk Detection and Lightweight Response*. Technical design of the **detection** branch is summarized in `后端多任务模型说明文档.md`.

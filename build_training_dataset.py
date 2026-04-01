@@ -4,7 +4,7 @@ import json
 import glob
 import random
 import argparse
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, Optional
 
 import pandas as pd
 
@@ -32,12 +32,13 @@ class RunningStats:
         self.s2_counts = [0] * len(S2_LABELS)
         self.s3_counts = [0] * len(S3_LABELS)
 
-    def update(self, s1: List[int], s2: int, s3: int):
+    def update(self, s1: int, s2: int, s3: int):
         self.n += 1
-        if any(int(v) == 1 for v in s1):
+        s1i = int(s1)
+        if 0 <= s1i < len(S1_LABELS):
+            self.s1_counts[s1i] += 1
+        if s1i != 15:
             self.s1_nonzero += 1
-        for i, v in enumerate(s1):
-            self.s1_counts[i] += int(v)
         self.s2_counts[int(s2)] += 1
         self.s3_counts[int(s3)] += 1
 
@@ -108,7 +109,12 @@ def main():
     parser.add_argument("--shuffle", action="store_true", help="输出前打乱（会占用内存）")
 
     # chat 语料没有 S2 真实标签：默认标为 none(=5)，你也可以改为别的 id
-    parser.add_argument("--chat_s2_default", type=int, default=5, help="chat 文本的 S2 默认标签（默认 none=5）")
+    parser.add_argument(
+        "--chat_s2_default",
+        type=int,
+        default=6,
+        help="EFA S2 index for chat lines without mood label (default 6 = 2.7 尚未达到S2)",
+    )
 
     args = parser.parse_args()
 
@@ -167,7 +173,7 @@ def main():
             writer.writeheader()
             for rec in items:
                 rec2 = dict(rec)
-                rec2["s1"] = json.dumps(rec2["s1"], ensure_ascii=False)
+                rec2["s1"] = int(rec2["s1"])
                 writer.writerow(rec2)
 
     # 4) print stats

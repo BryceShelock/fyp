@@ -15,13 +15,22 @@ from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+from multitask_config import DEFAULT_INFERENCE_MODEL_DIR
 from multitask_predict import predict_text
 from chat_llm import build_system_user_lines, generate_reply, stream_generate_reply
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "chat_app.db")
+_REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(_REPO_ROOT, "chat_app.db")
+
+
+def _html_file_response(filename: str) -> FileResponse:
+    path = os.path.join(_REPO_ROOT, filename)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail=f"Missing {filename} under repo root")
+    return FileResponse(path, media_type="text/html; charset=utf-8")
 
 
 def _recent_ai_snippets_for_prompt(hist: List[dict], max_turns: int = 3, max_chars: int = 220) -> List[str]:
@@ -169,7 +178,9 @@ async def _translate_to_en(text: str) -> str:
         return ""
     cfg = _get_llm_config_row()
     if not bool(cfg.get("llm_enabled", 1)):
-        return ""
+        return (
+            "[Translation unavailable: turn on 'Enable external LLM' in Admin, save, and configure API.]"
+        )
     api_base = (cfg.get("api_base") or "").strip() or None
     endpoint_path = (cfg.get("endpoint_path") or "").strip() or "/v1/chat/completions"
     api_key = cfg.get("api_key") or ""
@@ -202,7 +213,7 @@ async def _translate_to_en(text: str) -> str:
 class ChatSendReq(BaseModel):
     user_id: str
     text: str
-    model_dir: str = "multitask_output/best_model"
+    model_dir: str = DEFAULT_INFERENCE_MODEL_DIR
     device: str = "auto"
     stream: bool = False
 
@@ -221,7 +232,7 @@ class AdminReplyReq(BaseModel):
 class AdminReleaseReq(BaseModel):
     conversation_id: str
     admin_id: str
-    manual_risk: str = "低风险"
+    manual_risk: str = "Low risk"
 
 
 class LlmConfigUpdate(BaseModel):
@@ -261,7 +272,7 @@ class UserEventReq(BaseModel):
     user_id: str
     event_type: str  # moments | status
     content: str
-    model_dir: str = "multitask_output/best_model"
+    model_dir: str = DEFAULT_INFERENCE_MODEL_DIR
     device: str = "auto"
 
 
@@ -293,6 +304,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/")
+async def serve_wechat_ui():
+    """浏览器直接打开 http://127.0.0.1:8010/ 即可用微信 mock（同源，避免 file:// 被拒）。"""
+    return _html_file_response("wechat_mock.html")
+
+
+@app.get("/wechat_mock.html")
+async def serve_wechat_ui_named():
+    return _html_file_response("wechat_mock.html")
+
+
+@app.get("/admin.html")
+async def serve_admin_ui():
+    return _html_file_response("admin.html")
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -1537,6 +1564,12 @@ async def admin_takeover(req: AdminTakeoverReq):
     return {"ok": True, "conversation_id": req.conversation_id, "status": "admin"}
 
 
+# Shown to the user when a moderator returns the chat to AI (English).
+ADMIN_RELEASE_TO_AI_SYSTEM_MSG_EN = (
+    "System: The moderator has released this chat. W (AI) is handling messages again."
+)
+
+
 @app.post("/admin/release")
 async def admin_release(req: AdminReleaseReq):
     conn = _get_conn()
@@ -1544,16 +1577,33 @@ async def admin_release(req: AdminReleaseReq):
     if not conv:
         conn.close()
         raise HTTPException(status_code=404, detail="conversation not found")
-    if conv.get("assigned_admin_id") != req.admin_id:
+    assigned = conv.get("assigned_admin_id")
+    if assigned and assigned != req.admin_id:
         conn.close()
-        raise HTTPException(status_code=403, detail="conversation not assigned to this admin")
+        raise HTTPException(
+            status_code=403,
+            detail="This conversation is locked to another moderator ID.",
+        )
     now = int(time.time())
     conn.execute(
         "UPDATE conversations SET status='ai', assigned_admin_id=NULL, admin_lock=0, manual_risk=?, updated_at=? WHERE conversation_id=?",
         (req.manual_risk, now, req.conversation_id),
     )
+    conn.execute(
+        "INSERT INTO messages (conversation_id, role, content, ts) VALUES (?, 'system', ?, ?)",
+        (req.conversation_id, ADMIN_RELEASE_TO_AI_SYSTEM_MSG_EN, now),
+    )
     conn.commit()
     conn.close()
+    await ws_manager.broadcast_conversation(
+        req.conversation_id,
+        {
+            "type": "conversation_update",
+            "conversation_id": req.conversation_id,
+            "messages": [{"role": "system", "content": ADMIN_RELEASE_TO_AI_SYSTEM_MSG_EN, "ts": now}],
+            "status": "ai",
+        },
+    )
     await ws_manager.broadcast_conversation(
         req.conversation_id,
         {
@@ -1564,6 +1614,9 @@ async def admin_release(req: AdminReleaseReq):
         },
     )
     await ws_manager.broadcast_admins({"type": "queue_changed"})
+    await ws_manager.broadcast_admins(
+        {"type": "conversation_changed", "conversation_id": req.conversation_id}
+    )
     return {"ok": True, "conversation_id": req.conversation_id, "status": "ai", "manual_risk": req.manual_risk}
 
 
@@ -1825,8 +1878,8 @@ if __name__ == "__main__":
         print("[backend_api] ERROR: port 8010 is busy. Please stop the occupying process, then retry.")
         raise SystemExit(1)
 
-    print(f"[backend_api] API:   http://127.0.0.1:{port}")
-    print(f"[backend_api] User UI:  http://127.0.0.1:8088/wechat_mock.html?api=http://127.0.0.1:{port}")
-    print(f"[backend_api] Admin UI: http://127.0.0.1:8088/admin.html?api=http://127.0.0.1:{port}")
+    print(f"[backend_api] API + 用户页(同源): http://127.0.0.1:{port}/")
+    print(f"[backend_api] Admin 页:              http://127.0.0.1:{port}/admin.html")
+    print(f"[backend_api] OpenAPI:                http://127.0.0.1:{port}/docs")
     print("[backend_api] Gradio (optional): run `python gradio.py` then open shown URL.")
     uvicorn.run("backend_api:app", host="127.0.0.1", port=port, reload=False)

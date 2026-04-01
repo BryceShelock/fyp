@@ -18,3 +18,9 @@ dataset_multitask.jsonl
 # OS/editor
 .DS_Store
 Thumbs.db
+# Local / licensed / privacy
+dataset_efaqa_multitask.csv
+dataset/efaqa-corpus-zh.utf8.txt
+eval_report.json
+eval_plots/
+操作记录.md
